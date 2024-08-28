@@ -5,3 +5,4 @@ pandas
 requests
 plotly
 pypowsybl==1.6.1
+pypowsybl-jupyter @ https://github.com/powsybl/pypowsybl-jupyter/archive/refs/heads/mapviewer_widget.zip
