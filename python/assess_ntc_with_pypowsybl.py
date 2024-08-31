@@ -162,6 +162,7 @@ network_test.get_generators()
 #             id rdfid PK
 #             string name
 #             float p0
+#             string voltage_level_id FK
 #         }
 # ```
 
@@ -704,46 +705,107 @@ generators = generators.loc[~hvdc]
 
 # ## Calculate sensitivity of lines to parameters : PTDF matrix
 
+# #### Example with load increase in Spain
+
+# ##### Calculate initial flows
+
+# In[141]:
+
+
+def get_flows(network):
+    lines = network.get_lines(attributes=["name", "p1"])
+    tie_lines = network.get_dangling_lines(attributes=["name", "p"]).rename(columns={"p": "p1"})
+    flows = pd.concat([lines, tie_lines])
+    return flows.reset_index().set_index(["id", "name"])["p1"]
+
+
+# In[142]:
+
+
+res = pp.loadflow.run_dc(network, parameters=parameters_lf)
+initial_flows = get_flows(network)
+res
+
+
+# ##### Increase the load in Spain by 100 MW
+
+# In[145]:
+
+
+load_es = loads[loads["CGMES.regionName"] == "ES"].copy()
+load_es["p0"] = load_es["p0"] + 100 * load_es["p0"] / load_es["p0"].sum()
+network.update_loads(load_es[["p0"]])
+
+
+# ##### Perform new load flow after load increase
+
+# In[148]:
+
+
+res = pp.loadflow.run_dc(network, parameters=parameters_lf)
+flows_after_load_increase = get_flows(network)
+res
+
+
+# ##### Calculate sensitivity to load increase in Spain
+
+# In[150]:
+
+
+sensitivity = (flows_after_load_increase - initial_flows) / 100
+sensitivity.dropna().sort_values()
+
+
+# ##### Go back to initial values
+
+# In[153]:
+
+
+network.update_loads(loads.loc[loads["CGMES.regionName"] == "ES", ["p0"]])
+res = pp.loadflow.run_dc(network, parameters=parameters_lf)
+res
+
+
 # ### Parameters selection
 
 # In[38]:
 
 
 parameters = {
-    "ES_Wind Onshore": {"type": "generators", "filter": (generators["CGMES.regionName"] == "ES") & (generators["energy_source"] == "WIND")},
-    "ES_Other_Gen": {"type": "generators", "filter": (generators["CGMES.regionName"] == "ES") & (generators["energy_source"] != "WIND")},
-    "ES_Load": {"type": "loads", "filter": loads["CGMES.regionName"] == "ES"},
-    "FR_Nuclear":  {"type": "generators", "filter": (generators["CGMES.regionName"] == "FR") & (generators["energy_source"] == "NUCLEAR")},
-    "FR_Other_Gen": {"type": "generators", "filter": (generators["CGMES.regionName"] == "FR") & (generators["energy_source"] != "NUCLEAR")},
-    "FR_Load": {"type": "loads", "filter": loads["CGMES.regionName"] == "FR"},
-    "PT_Gen_Total": {"type": "generators", "filter": generators["CGMES.regionName"] == "PT00"},
-    "PT_Load": {"type": "loads", "filter": loads["CGMES.regionName"] == "PT00"},
-    "FR_BE": {"type": "exchange", "filter": xinjections["name"].isin([".AVELL71MASTA", ".ACHEL71LONNY", ".AVELL72AVELI", ".AUBAL61M.MA5", ".AUBAL61MOULA", "MOULAL61SOTEL", ".FMONL61CHOO5" ])},
-    "FR_IT": {"type": "exchange", "filter": xinjections["name"].isin([".VENAL71VLARO", ".RODPL71ALBER", ".RODPL72ALBER"])},
-    "FR_UK": {"type": "exchange", "filter": xinjections["name"].isin(["BIPOLL72MANDA", ".IFA2L71TOURB", "BIPOLL71MANDA", "MANDAL71PEUP5", ])},
-    "FR_DE": {"type": "exchange", "filter": xinjections["name"].isin([".EICL72MUHL_PINT228", ".ENSDL71VIGY", ".ENSDL72VIGY", ".EICL73MUHL_PINT228", ])},
-    "FR_CH": {"type": "exchange", "filter": xinjections["name"].isin(["PRESSL61VALLO", ".VERBL71B.TOL", ".SSTRL61CORNI", ".ROMAL71B.TOL", ".VERBL61GEN.P", ".VERBL62GEN.P", ".BASSL71SIERE", ".BASSL71MAMBE", ".ASPHL71SIERE", ".LAUFL71SIERE", ".RIDDL61CORNI" ])},
-    "ES_MA": {"type": "exchange", "filter": xinjections["name"].isin(["TARIFA_XTA_FA12_2_400", "TARIFA_XTA_FA11_1_400"])},
-    "FR_IE": {"type": "exchange", "filter": xinjections["name"].isin([".CELTICL71MARTY"])},
-
+    "ES_Wind Onshore":
+        {"type": "generators", "filter": (generators["CGMES.regionName"] == "ES") & (generators["energy_source"] == "WIND")},
+    "ES_Other_Gen":
+        {"type": "generators", "filter": (generators["CGMES.regionName"] == "ES") & (generators["energy_source"] != "WIND")},
+    "ES_Load":
+        {"type": "loads", "filter": loads["CGMES.regionName"] == "ES"},
+    "FR_Nuclear":
+        {"type": "generators", "filter": (generators["CGMES.regionName"] == "FR") & (generators["energy_source"] == "NUCLEAR")},
+    "FR_Other_Gen":
+        {"type": "generators", "filter": (generators["CGMES.regionName"] == "FR") & (generators["energy_source"] != "NUCLEAR")},
+    "FR_Load": 
+        {"type": "loads", "filter": loads["CGMES.regionName"] == "FR"},
+    "PT_Gen_Total":
+        {"type": "generators", "filter": generators["CGMES.regionName"] == "PT00"},
+    "PT_Load": 
+        {"type": "loads", "filter": loads["CGMES.regionName"] == "PT00"},
+    "FR_BE":
+        {"type": "exchange", "filter": xinjections["name"].isin([".AVELL71MASTA", ".ACHEL71LONNY", ".AVELL72AVELI", ".AUBAL61M.MA5", ".AUBAL61MOULA", "MOULAL61SOTEL", ".FMONL61CHOO5" ])},
+    "FR_IT": 
+        {"type": "exchange", "filter": xinjections["name"].isin([".VENAL71VLARO", ".RODPL71ALBER", ".RODPL72ALBER"])},
+    "FR_UK":
+        {"type": "exchange", "filter": xinjections["name"].isin(["BIPOLL72MANDA", ".IFA2L71TOURB", "BIPOLL71MANDA", "MANDAL71PEUP5", ])},
+    "FR_DE":
+        {"type": "exchange", "filter": xinjections["name"].isin([".EICL72MUHL_PINT228", ".ENSDL71VIGY", ".ENSDL72VIGY", ".EICL73MUHL_PINT228", ])},
+    "FR_CH":
+        {"type": "exchange", "filter": xinjections["name"].isin(["PRESSL61VALLO", ".VERBL71B.TOL", ".SSTRL61CORNI", ".ROMAL71B.TOL", ".VERBL61GEN.P", ".VERBL62GEN.P", ".BASSL71SIERE", ".BASSL71MAMBE", ".ASPHL71SIERE", ".LAUFL71SIERE", ".RIDDL61CORNI" ])},
+    "ES_MA": 
+        {"type": "exchange", "filter": xinjections["name"].isin(["TARIFA_XTA_FA12_2_400", "TARIFA_XTA_FA11_1_400"])},
+    "FR_IE": 
+        {"type": "exchange", "filter": xinjections["name"].isin([".CELTICL71MARTY"])},
 }
 
 
-# **changer les injections pour que augmentation injection (+100 sur dangling_line -> augmentation conso -> on augmente les flux FR->x)**
-
 # ### Initial values of the selected parameters
-
-# In[39]:
-
-
-display_voltage_level("MARTYP7")
-
-
-# In[40]:
-
-
-xinjections[xinjections["name"].isin(["TARIFA_XTA_FA12_2_400", "TARIFA_XTA_FA11_1_400"])]
-
 
 # In[41]:
 
@@ -763,33 +825,20 @@ for nom, param in parameters.items():
 initial_tso_data = pd.Series(initial_tso_data)
 
 
-# In[42]:
+# ### Check that balance is correct
+
+# In[157]:
 
 
-print(balance)
+balance = (
+    initial_tso_data[["ES_Wind Onshore", "ES_Other_Gen", "FR_Nuclear", "FR_Other_Gen", "PT_Gen_Total"]].sum()
+    - initial_tso_data[["FR_BE", "FR_IT", "FR_UK", "FR_DE", "FR_CH", "ES_MA", "FR_IE"]].sum()
+    - initial_tso_data[["FR_Load", "ES_Load", "PT_Load"]].sum()
+)
+balance
 
 
-# In[43]:
-
-
-def get_flows(network):
-    lines = network.get_lines(attributes=["name", "p1"])
-    tie_lines = network.get_dangling_lines(attributes=["name", "p"]).rename(columns={"p": "p1"})
-    flows = pd.concat([lines, tie_lines])
-    return flows.reset_index().set_index(["id", "name"])["p1"]
-
-
-# In[44]:
-
-
-res = pp.loadflow.run_dc(network, parameters=parameters_lf)
-initial_flows = get_flows(network)
-res
-
-
-# ### Example of calculating senstivity to load increase in Spain
-
-# #### Increase the load in Spain by 100 MW
+# ##### Increase the load in Spain by 100 MW
 
 # In[45]:
 
@@ -800,14 +849,7 @@ load_es["p0"] = load_es["p0"] + 100 * load_es["p0"] / load_es["p0"].sum()
 network.update_loads(load_es[["p0"]])
 
 
-# #### New load flow
-
-# In[46]:
-
-
-res = pp.loadflow.run_dc(network, parameters=parameters_lf)
-res
-
+# ##### New load flow
 
 # In[47]:
 
@@ -817,7 +859,7 @@ print(res[0].slack_bus_results[0].active_power_mismatch)
 new_flows = get_flows(network)
 
 
-# #### Go back to initial loads
+# ##### Go back to initial loads
 
 # In[48]:
 
@@ -825,9 +867,9 @@ new_flows = get_flows(network)
 network.update_loads(loads.loc[parameters["ES_Load"]["filter"], ["p0"]])
 
 
-# #### Calculate sensitivity
+# ##### Calculate sensitivity to load increase in Spain
 
-# In[49]:
+# In[140]:
 
 
 (new_flows - initial_flows).dropna().sort_values()
@@ -863,6 +905,8 @@ for nom, param in parameters.items():
         network.update_dangling_lines(xinjections.loc[parameters[nom]["filter"], ["p0"]])
 
 
+# ### PTDF matrix generation
+
 # In[51]:
 
 
@@ -871,8 +915,6 @@ PTDF.head()
 
 
 # ### All generators started proportionnaly to their Pmax 
-
-# ### PTDF matrix computation
 
 # ## Get yearly values
 
@@ -1010,9 +1052,9 @@ crossborders_flows = crossborders_flows[links]
 crossborders_flows
 
 
-# ## Check that balances are correct for each TSO
+# ### Check that balances are correct for each TSO
 
-# ### Calculate the balance using load and generation
+# #### Calculate the balance using load and generation#
 
 # In[61]:
 
@@ -1022,11 +1064,7 @@ for tso in TSOS:
     balance_generation_load[tso] = generation[f"{tso}_Gen_Total"] - load[f"{tso}_Load"]
 
 
-# In[62]:
-
-
-balance_generation_load["FR"]
-
+# #### Calculate the balance using exchanges
 
 # In[63]:
 
@@ -1037,6 +1075,8 @@ balance_exchanges = {
     "FR":  (crossborders_flows["FR_ES"] + crossborders_flows["FR_BE"] + crossborders_flows["FR_DE"] + crossborders_flows["FR_CH"]+ crossborders_flows["FR_IT"] + crossborders_flows["FR_UK"])
 }
 
+
+# #### Comparison of balances
 
 # In[64]:
 
@@ -1095,7 +1135,7 @@ fig.update_yaxes(
 fig.show()
 
 
-# ### Modify the LOAD in each TSO to have generation - load = 0
+# #### Modify the LOAD in each TSO to have generation - load = 0
 
 # In[65]:
 
@@ -1107,35 +1147,7 @@ for tso in TSOS:
     print((balance_exchanges[tso] - balance_generation_load[tso]).mean())
 
 
-# In[66]:
-
-
-balance_exchanges["FR"] + balance_exchanges["ES"] + balance_exchanges["PT"] 
-
-
-# In[67]:
-
-
-- tso_data.filter(like="_FR").sum(axis=1) + tso_data["ES_FR"]
-
-
 # ### Build TSO data
-
-# In[68]:
-
-
-(tso_data["FR_Nuclear"] + tso_data["ES_Wind Onshore"] + tso_data["FR_Other_Gen"] + tso_data['ES_Other_Gen'] + tso_data['PT_Gen_Total'] - tso_data.filter(like='Load').sum(axis=1) + tso_data.filter(like="_FR").sum(axis=1) - tso_data["ES_FR"])
-
-
-# In[69]:
-
-
-bilan = prod - conso
-bilan_fr = - es_fr - de_fr - uk_fr - ch_fr - it_fr - be_fr
-bilan_es = es_fr + es_pt
-bilan_pt = - es_pt
-xinj = uk_fr + be_fr + de_fr + it_fr + ch_fr
-
 
 # In[70]:
 
@@ -1144,43 +1156,22 @@ generation["FR_Other_Gen"] = generation["FR_Gen_Total"] - generation["FR_Nuclear
 generation["ES_Other_Gen"] = generation["ES_Gen_Total"] - generation["ES_Wind Onshore"]
 
 
-# In[71]:
+# In[158]:
 
 
 tso_data = pd.concat([load, crossborders_flows, generation["FR_Nuclear"], generation["ES_Wind Onshore"], generation["FR_Other_Gen"], generation["ES_Other_Gen"], generation["PT_Gen_Total"] ], axis=1)
+tso_data["ES_MA"] = 0
+tso_data["FR_IE"] = 0
 tso_data
 
 
-# In[72]:
-
-
-tso_data["ES_MA"] = 0
-tso_data["FR_IE"] = 0
-
+# ## Calcultate yearly flows
 
 # In[73]:
 
 
-flows_without_slack = initial_flows + (tso_data[PTDF.columns] - initial_tso_data).dot(PTDF.T)
-flows_without_slack
-
-
-# In[74]:
-
-
-flows_without_slack.to_csv(r"d:\users\guyfab\documents\bin\flows_with_slack_last.csv", sep=";")
-
-
-# In[75]:
-
-
-PTDF.to_csv(r"d:\users\guyfab\documents\bin\PTDF.csv", sep=";")
-
-
-# In[ ]:
-
-
-281+89
+flows = initial_flows + (tso_data[PTDF.columns] - initial_tso_data).dot(PTDF.T)
+flows
 
 
 # In[77]:
@@ -1216,73 +1207,13 @@ flows_without_slack["_64511498-394f-5f79-a185-a52044271a8c"]
 # In[ ]:
 
 
-flows_without_slack["_08e4b8cf-285b-53b6-b2f3-9b76b6f1d47e"]
-
-
-# In[ ]:
-
-
-flows_without_slack["_c97e63ce-25ce-533a-b54f-d84fdfde67fc"]
-
-
-# In[ ]:
-
-
-tso_data[PTDF.columns] - initial_value
-
-
-# In[ ]:
-
-
 PTDF.loc["SLACK_LINE"]
-
-
-# In[ ]:
-
-
-load.select_dtypes(include="number").corrwith(flows_without_slack["SLACK_LINE"]).dropna().abs().sort_values()
-
-
-# In[ ]:
-
-
-tso_data.select_dtypes(include="number").corrwith(flows_without_slack["SLACK_LINE"]).dropna().abs().sort_values()
-
-
-# In[ ]:
-
-
-flows_without_slack["SLACK_LINE"].describe()
-
-
-# In[ ]:
-
-
-initial_tso_data["MA_ES"] *= -1
-
-
-# In[ ]:
-
-
-initial_tso_data.loc[initial_tso_data.filter(like="_FR").index] = - initial_tso_data.loc[initial_tso_data.filter(like="_FR").index] 
-
-
-# In[ ]:
-
-
-tso_data["FR_Load"].plot()
 
 
 # In[82]:
 
 
 flows_without_slack["_363fc03a-2307-5959-20f7-38c771355440"]
-
-
-# In[89]:
-
-
--659.89-608.8-297-162.27
 
 
 # In[83]:
@@ -1303,11 +1234,9 @@ flows_without_slack["_0a3cbdb0-cd71-52b0-b93d-cb48c9fea3e2"]
 flows_without_slack["_2e81de07-4c22-5aa1-9683-5e51b054f7f8"]
 
 
-# In[117]:
+# # Calculate exchange increase possibility between FR-ES (**N condition**)
 
-
-flows = flows_without_slack.droplevel(0, axis=1)
-
+# ## Calculate sensitivity to exchanges between FR-ES
 
 # In[133]:
 
@@ -1317,21 +1246,13 @@ powershift_sensitivity = powershift_sensitivity[powershift_sensitivity.abs() > 0
 powershift_sensitivity.sort_values().head(20)
 
 
-# # Extract ratings from the models
-
-# In[122]:
-
-
-dangling_lines
-
+# ## Extract ratings from the models
 
 # In[124]:
 
 
-import math
 monitored_lines = ["HERNANI_XHE_AR11_1_400", "XAR_AR21_DESF.ARK_1_220", "BIESCAS_XBI_PR21_1_220", "VIC_XVI_BA11_1_400"]
-dangling_lines = network.get_dangling_lines()
-dangling_lines = dangling_lines.merge(voltage_levels, left_on="voltage_level_id", right_index=True, how="left", suffixes=("", "vl"))
+tie_lines = xinjections.merge(voltage_levels, left_on="voltage_level_id", right_index=True, how="left", suffixes=("", "vl"))
 ratings = network.get_operational_limits()
 patl_ratings = ratings[ratings["acceptable_duration"] == -1]
 line_ratings = {}
@@ -1342,11 +1263,7 @@ for monitored_line in monitored_lines:
 line_ratings
 
 
-# In[126]:
-
-
-pd.DataFrame(line_ratings, index=[0, 1])
-
+# ## Calculate maximum powershift in N condition
 
 # In[134]:
 
@@ -1354,7 +1271,7 @@ pd.DataFrame(line_ratings, index=[0, 1])
 from ortools.linear_solver import pywraplp 
 
 # Get the flows for monitored line only
-flows_n = flows[monitored_lines]
+flows_n = flowsdroplevel(0, axis=1)[monitored_lines]
 
 # Suppose 1500 MW as ratings for all lines ! Obviously wrong, should be replaced by real ratings of the lines (reading a csv file for example)
 ratings = pd.DataFrame(line_ratings, index=flows_n.index)
@@ -1390,6 +1307,19 @@ for pit in tqdm(range(len(flows)), desc="powershift calculation"):
     status = solver.Solve()
     solution_min = powershift.solution_value()
     solutions.append([solution_max, solution_min])
+
+
+# In[136]:
+
+
+pd.DataFrame(solutions, columns=["min", "max"]).plot()
+
+
+# In[139]:
+
+
+powershift = pd.DataFrame(solutions, columns=["min", "max"])
+(powershift['max'] - powershift["min"]).plot()
 
 
 # In[ ]:
