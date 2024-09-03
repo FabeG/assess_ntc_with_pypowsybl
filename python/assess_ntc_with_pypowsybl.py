@@ -45,13 +45,14 @@ import io
 import math
 import re
 from pathlib import Path
+from collections import defaultdict
 
 from tqdm.notebook import tqdm
 from IPython.display import SVG
 import numpy as np
+from ortools.linear_solver import pywraplp
 import pandas as pd
 import plotly.graph_objects as go
-import requests
 import pypowsybl as pp
 pd.options.plotting.backend = "plotly"
 
@@ -254,8 +255,10 @@ network_test.get_buses()
 
 boundary_set = "20211216T1459Z_ENTSO-E_BD_1346.zip"
 parameters = {
-    "iidm.import.cgmes.boundary-location": str((Path("./data") / boundary_set).resolve()),    # the boundary set will be imported
-    "iidm.import.cgmes.source-for-iidm-id": "rdfID",        # rdfID will be used as id for elements
+    # the boundary set will be imported
+    "iidm.import.cgmes.boundary-location": str((Path("./data") / boundary_set).resolve()),
+    # rdfID will be used as id for elements
+    "iidm.import.cgmes.source-for-iidm-id": "rdfID",
 }
 models = {
     "ES": "ES_3PQT.zip",
@@ -514,6 +517,8 @@ def display_voltage_level(voltage_level_name):
 # 
 # ![title](./images/substations_coordinates.png)
 
+# #### Read the csv file containing RTE substations coordinates
+
 # In[28]:
 
 
@@ -533,6 +538,8 @@ gps_coords_fr.loc["BEHLA", "longitude"] += 0.1
 gps_coords_fr
 
 
+# #### Filter substations to show (only south-west of France / voltage levels higher than 220 kV / no fictitious substations)
+
 # In[29]:
 
 
@@ -549,13 +556,25 @@ vl_for_gps_fr = (
 subst_for_gps_fr = vl_for_gps_fr.set_index("substation_id")["name"].str[:-2].str.strip().to_frame()
 
 
-# ### Using geocoder service to find GPS coordinates of Red Electrica substations
-
 # In[30]:
 
 
+coords_fr = (
+    gps_coords_fr
+    .merge(subst_for_gps_fr.reset_index(), left_on="Code poste", right_on="name")
+    .set_index("substation_id")
+)
+coords_fr.head()
+
+
+# ### Using geocoder service to find GPS coordinates of Red Electrica substations
+
+# #### Filter substations to show (only spanish substations close to the border / voltage levels higher than 220 kV)
+
+# In[31]:
+
+
 idx_es = network.get_network_area_diagram_displayed_voltage_levels(
-    # Only substations close to the border
     list(voltage_levels[voltage_levels["name"].isin(["HERNANI", "BIESCAS", "VIC", "LLOGAIA"])].index),
     depth=2
 )
@@ -569,9 +588,10 @@ subst_for_gps_es =  (
 subst_for_gps_es.head()
 
 
-# In[31]:
+# In[32]:
 
 
+# Hhelp Nominatim to find the city names
 city = {
     "LAFARGA": "JUIA",
     "RIUDAREN": "RIUDARENES",
@@ -588,7 +608,9 @@ city = {
 }
 
 
-# In[32]:
+# #### Find spanish substations coordinates using geocoder (return GPS coordinates based on city names)
+
+# In[33]:
 
 
 gps_coords_es = {}
@@ -608,19 +630,17 @@ if to_execute:
         time.sleep(1.1)
 
 
-# In[33]:
-
-
-coords_es = subst_for_gps_es.merge(pd.DataFrame.from_dict(gps_coords_es, orient="index", columns=["latitude", "longitude"]), left_on="name", right_index=True)
-coords_es.head()
-
-
 # In[34]:
 
 
-coords_fr = gps_coords_fr.merge(subst_for_gps_fr.reset_index(), left_on="Code poste", right_on="name").set_index("substation_id")
-coords_fr.head()
+coords_es = (
+    subst_for_gps_es
+    .merge(pd.DataFrame.from_dict(gps_coords_es, orient="index", columns=["latitude", "longitude"]), left_on="name", right_index=True)
+)
+coords_es.head()
 
+
+# #### Merge spanish and french substations coordinates
 
 # In[35]:
 
@@ -629,28 +649,31 @@ coords_fr_es = pd.concat([coords_fr, coords_es]).rename_axis("id")[["latitude", 
 coords_fr_es.head()
 
 
+# #### Update ``substationsPosition`` extension (enrich substations to add GPS coordinates in pyPowSyBl)
+
 # In[36]:
 
 
 network.remove_extensions('substationPosition', network.get_extensions('substationPosition').index)
 network.create_extensions('substationPosition', coords_fr_es[["latitude", "longitude"]])
+
+
+# ### Show the GeoGraphical network map
+
+# In[37]:
+
+
+# Don't want to see disconnected lines
 lines = network.get_lines(["connected1", "connected2"])
 network.remove_elements(lines[~lines["connected1"] | ~lines["connected2"]].index)
 try:
-    import ipywidgets as widgets
-    from pypowsybl_jupyter import NetworkMapWidget, display_sld
-    out_events = widgets.Output()
+    # Show the Geographical map
+    from pypowsybl_jupyter import NetworkMapWidget
     mapview = NetworkMapWidget(network, nominal_voltages_top_tiers_filter=5, use_name=True)
 except ImportError:
     parameter = pp.network.NadParameters(layout_type=pp.network.NadLayoutType.GEOGRAPHICAL, bus_legend=False)
     mapview = SVG(network.get_network_area_diagram(list(vl_for_gps_fr.index.union(vl_for_gps_es.index)), nad_parameters=parameter).svg.replace("25px", "250px").replace("stroke-width: 5", "stroke-width: 15"))
 mapview
-
-
-# In[ ]:
-
-
-
 
 
 # ## Calculate yearly flows in the grid
@@ -659,15 +682,14 @@ mapview
 
 # #### Remove generators modelizing HVDC injections
 
-# In[37]:
+# In[38]:
 
 
-# hvdc = generators["name"].str.contains("VSC") | generators["name"].str.contains("HVDC")
-hvdc = generators["name"].str.contains("VSC")
+hvdc = generators["name"].str.contains("VSC") | generators["name"].str.contains("HVDC")
 generators[hvdc]
 
 
-# In[38]:
+# In[39]:
 
 
 network.remove_elements(generators[hvdc].index)
@@ -676,7 +698,7 @@ generators = generators.loc[~hvdc]
 
 # #### Starting all generators proportionnaly to their Pmax
 
-# In[39]:
+# In[40]:
 
 
 # TODO
@@ -684,9 +706,9 @@ generators = generators.loc[~hvdc]
 
 # ### Calculate sensitivity of lines to parameters : PTDF matrix
 
-# #### Calculate initial flows
+# #### Calculate initial flows using DC load flow
 
-# In[40]:
+# In[41]:
 
 
 def get_flows(network):
@@ -702,25 +724,24 @@ def get_flows(network):
     return flows.reset_index().set_index(["id", "name"])["p1"]
 
 
-# In[41]:
+# In[42]:
 
 
+# Run DC load flow
 parameters_lf = pp.loadflow.Parameters(
     distributed_slack=False,
     connected_component_mode=pp.loadflow.ConnectedComponentMode.MAIN,
 )
 res = pp.loadflow.run_dc(network, parameters=parameters_lf)
+# Get flows on all lines
 initial_flows = get_flows(network)
+
+# Build a dict between line_names and id
+lines_id_dict = initial_flows.reset_index(level=1)["name"].to_dict()
 print(res)
 print("")
 print(f"There is an unbalance of {res[0].slack_bus_results[0].active_power_mismatch:.1f} MW")
 print("(too much generation started compared to the load)")
-
-
-# In[42]:
-
-
-initial_flows.loc[(slice(None), "HERNANI_XHE_AR11_1_400 + .HERNL71ARGIA")]
 
 
 # #### First sensitivity calculation: example with load increase in Spain
@@ -911,8 +932,9 @@ for nom, param in parameters.items():
 # In[52]:
 
 
+pd.set_option('display.float_format', '{:.3f}'.format)
 PTDF = pd.DataFrame(sensitivity)
-PTDF
+PTDF.droplevel(0)
 
 
 # ## Get yearly TSO values (load, generation, crossborder exchanges)
@@ -1172,10 +1194,10 @@ tso_data["FR_IE"] = 0
 tso_data
 
 
-# ## Calcultate yearly flows
+# ## Calculate yearly flows
 # 
 # \begin{align}
-# flows_{PiT} = flows_{base\_case} + (tso\_data_{PiT} - tso\_data_{base\_case}) . PTDF
+# flows_{Hour} = flows_{base\_case} + (tso\_data_{Hour} - tso\_data_{base\_case}) . PTDF
 # \end{align}
 
 # In[68]:
@@ -1267,7 +1289,7 @@ powershift_sensitivity = (PTDF['FR_Load'] - PTDF['ES_Load'])
 # We will keep only lines with sensitivity greater than 5%
 powershift_sensitivity = powershift_sensitivity[powershift_sensitivity.abs() > 0.05]
 powershift_sensitivity_with_linenames = powershift_sensitivity.droplevel(0)
-powershift_sensitivity_with_linenames
+powershift_sensitivity_with_linenames.sort_values()
 
 
 # ### Extract ratings from network model
@@ -1303,13 +1325,15 @@ ratings_monitored_lines = (
 ratings_monitored_lines
 
 
-# ####  ...and convert them in Ampers
+# ####  ...and convert them in MW
 
 # In[77]:
 
 
+# Keep lowest value of both sides
 ratings_monitored_lines["value"] = ratings_monitored_lines[["value1", "value2"]].fillna(9999).min(axis=1)
 ratings_monitored_lines["nominal_v"] = ratings_monitored_lines["nominal_v1"].where(ratings_monitored_lines["value2"].isnull(), ratings_monitored_lines["nominal_v2"])
+# Convert the rating from Ampers to MW
 ratings_monitored_lines["value_in_mw"] = math.sqrt(3) * ratings_monitored_lines["nominal_v"] * ratings_monitored_lines["value"] / 1_000
 ratings_dict = ratings_monitored_lines.set_index("name")["value_in_mw"].to_dict()
 
@@ -1320,47 +1344,24 @@ ratings_dict = ratings_monitored_lines.set_index("name")["value_in_mw"].to_dict(
 pd.Series(ratings_dict)
 
 
-# ### Extract ratings from the models
-
-# In[79]:
-
-
-# monitored_lines = ["HERNANI_XHE_AR11_1_400", "XAR_AR21_DESF.ARK_1_220", "BIESCAS_XBI_PR21_1_220", "VIC_XVI_BA11_1_400"]
-# tie_lines = xinjections.merge(voltage_levels, left_on="voltage_level_id", right_index=True, how="left", suffixes=("", "vl"))
-# ratings = network.get_operational_limits()
-# patl_ratings = ratings[ratings["acceptable_duration"] == -1]
-# line_ratings = {}
-# for monitored_line in monitored_lines:
-#     rdfid = tie_lines[tie_lines["name"] == monitored_line].index
-#     nominal_voltage = tie_lines.loc[tie_lines["name"] == monitored_line, "nominal_v"].to_numpy()[0]
-#     line_ratings[monitored_line] = patl_ratings.loc[rdfid, "value"].to_numpy()[0] * nominal_voltage * math.sqrt(3) / 1_000
-# line_ratings
-
-
-# In[80]:
-
-
-flows.droplevel(0, axis=1)["HERNANI_XHE_AR11_1_400 + .HERNL71ARGIA"]
-
-
 # ### Calculate maximum powershift in N condition
 
-# In[81]:
+# In[79]:
 
 
 from ortools.linear_solver import pywraplp
 
 N_RATING_SECURITY_MARGIN = 0.9
 
-# Get the flows for monitored line only
-flows_n = flows.droplevel(0, axis=1)[monitored_linenames]
+# Get the flows and remove id for clarity
+flows_n = flows.droplevel(0, axis=1)
 
 ratings = N_RATING_SECURITY_MARGIN * pd.DataFrame(ratings_dict, index=flows_n.index)
 
 solutions = []
 # Calculate lower and upper bound to feed the optimizer
-lower_bound = pd.DataFrame(0, columns=monitored_linenames, index=flows_n.index)
-upper_bound = pd.DataFrame(0, columns=monitored_linenames, index=flows_n.index)
+lower_bound = pd.DataFrame(0.0, columns=monitored_linenames, index=flows_n.index)
+upper_bound = pd.DataFrame(0.0, columns=monitored_linenames, index=flows_n.index)
 for monitored_line in tqdm(monitored_linenames, desc="calculate upper/lower bounds"):
     lower_bound[monitored_line] = -ratings[monitored_line] - flows_n[monitored_line]
     upper_bound[monitored_line] = ratings[monitored_line] - flows_n[monitored_line]
@@ -1390,13 +1391,13 @@ for pit in tqdm(range(len(flows)), desc="powershift calculation"):
     solutions.append([solution_max, solution_min])
 
 
-# In[82]:
+# In[80]:
 
 
 flows.droplevel(0, axis=1).head()
 
 
-# In[83]:
+# In[81]:
 
 
 pd.DataFrame(solutions, columns=["max", "min"]).plot()
@@ -1414,42 +1415,38 @@ pd.DataFrame(solutions, columns=["max", "min"]).plot()
 # - line_y: **10%** &rarr; **+ 10 MW** on line_y
 # - line_z: **- 30%** &rarr; **- 30 MW** on line_y
 
+# #### Formula used to calculate new flow for line i after outage of line j will be:
+# 
+# 
+# \begin{align}
+#     flow(i / j, \small{Hour}) = flow(i, \small{Hour}) + LODF(i,j) . flow(j, \small{Hour})
+# \end{align}
+
 # #### DC Sensitivity analysis initialization in pyPowsybl
-# - define monitored lines
-# - define contingencies
+# - define **monitored lines**: FR-ES **tie-lines**
+# - define **contingencies**: lines with **sensitivity greater than 5%** to ES-FR powershift
 # 
 # For a more detailed description, you can have a look at the [sensitivity analysis documentation](https://pypowsybl.readthedocs.io/en/stable/user_guide/sensitivity.html).
 
-# In[84]:
+# In[82]:
 
 
 monitored_lines
 
 
-# In[85]:
+# In[83]:
 
 
-lines_id_dict = initial_flows.reset_index(level=1)["name"].to_dict()
+contingencies_id = powershift_sensitivity.droplevel(1).index
 
 
-# In[86]:
+# In[84]:
 
 
-contingencies_id = powershift_sensitivity[powershift_sensitivity.abs() > 0.05].droplevel(1).index
-
-
-# In[87]:
-
-
-len(contingencies_id)
-
-
-# In[88]:
-
-
+# DC analysis initialization
 sa = pp.sensitivity.create_dc_analysis()
 sa.add_branch_flow_factor_matrix(
-    list(monitored_lines.index), [loads.index[0]], "otdf"
+    list(monitored_lines.index), [loads.index[0]], "lodf"
 )
 for contingency in contingencies_id:
     sa.add_single_element_contingency(contingency)
@@ -1459,20 +1456,20 @@ for contingency in contingencies_id:
 # 
 # Then get N-1 flows for all the contingencies, and concatenate the results
 
-# In[89]:
+# In[85]:
 
 
 sa_result = sa.run(network, parameters_lf)
 n_1 = pd.concat(
     [
-        sa_result.get_reference_matrix("otdf", contingency)
+        sa_result.get_reference_matrix("lodf", contingency)
         for contingency in contingencies_id
     ],
 )
 n_1.index = contingencies_id
 
 
-# In[90]:
+# In[86]:
 
 
 n_1
@@ -1490,124 +1487,102 @@ n_1
 # - $flow^{cb}_{0}$ is the initial flow of the critical branch **cb**
 # - $flow^{co}_{0}$ is the initial flow of the critical branch **co**
 
-# In[91]:
+# In[87]:
 
 
-n_1.sub(sa_result.get_reference_matrix("otdf").squeeze(), axis=1)
+n_1.sub(sa_result.get_reference_matrix("lodf").squeeze(), axis=1)
 
 
-# In[92]:
+# In[88]:
 
 
-otdf_matrix = (
-        n_1.sub(sa_result.get_reference_matrix("otdf").squeeze(), axis=1).rename(index=lines_id_dict)
-        .divide(initial_flows.loc[contingencies_id].droplevel(0), axis=0)
-        .fillna(0)
-    )
-otdf_matrix
+initial_flows.loc[contingencies_id].droplevel(0)
 
 
-# In[93]:
+# In[89]:
 
 
-# Tie-lines are made of dangling_line1 + dangling_line2
-# Direction of flows of tie-line is the same as dangling_line1, but in the other direction for dangling_line2
-# for col in otdf_matrix.columns:
-#     if " + " in col:
-#         otdf_matrix[tie_lines.at[col, "dangling_line1_id"]] = otdf_matrix[col]
-#         otdf_matrix[tie_lines.at[col, "dangling_line2_id"]] = - otdf_matrix[col]
-otdf_matrix = otdf_matrix.rename(columns=lines_id_dict)
-# otdf_matrix = otdf_matrix[monitored_lines]
-
-
-# In[94]:
-
-
-otdf_matrix
+lodf_matrix = (
+    n_1.sub(sa_result.get_reference_matrix("lodf").squeeze(), axis=1).rename(index=lines_id_dict).rename(columns=lines_id_dict)
+    .divide(initial_flows.loc[contingencies_id].droplevel(0), axis=0)
+    .fillna(0)
+)
+lodf_matrix
 
 
 # ## Calculate maximum powershift in N-1 condition
 # 
 # \begin{align}
-#     - ratings(i) < \underbrace{\overbrace{flow(i, PiT) + powershift(PiT).sensitivity(i)}^\text{flow of line i after powershift} + OTDF(i,j) . \overbrace{\bigl(flow(j, PiT) + powershift(PiT).sensitivity(j)\bigr)}^\text{flow of line j after powershift}}_\text{flow of line i after contingency of line j and powershift} < ratings(i)
+#     - ratings(i) < \underbrace{\overbrace{flow(i, \small Hour) + powershift(\small Hour).sensitivity(i)}^\text{flow of line i after powershift} + LODF(i,j) . \overbrace{\bigl(flow(j, \small Hour) + powershift(\small Hour).sensitivity(j)\bigr)}^\text{flow of line j after powershift}}_\text{flow of line i after contingency of line j and powershift} < ratings(i)
 # \end{align}
 # 
 # or
 # 
 # \begin{align}
-#     - ratings(i) - flow(i, PiT) -  OTDF(i, j) . flow(j, PiT) < powershift(PiT).\bigl(sensitivity(i) + OTDF(i,j).sensitivity(j)\bigr) < ratings(i) - flow(i, PiT) -  OTDF(i, j) . flow(j, PiT)
+#     - ratings(i) - flow(i, \small Hour) -  LODF(i, j) . flow(j, \small Hour) < powershift(\small Hour).\bigl(sensitivity(i) + LODF(i,j).sensitivity(j)\bigr) < ratings(i) - flow(i, \small Hour) -  LODF(i, j) . flow(j, \small Hour)
 # \end{align}
 
-# In[95]:
+# In[90]:
 
 
 contingencies_names = list(powershift_sensitivity_with_linenames.index)
 
 
-# In[96]:
-
-
-flows = flows.droplevel(axis=1, level=0)
-
-
-# In[97]:
+# In[91]:
 
 
 monitored_lines
 
 
-# In[98]:
+# In[ ]:
 
 
-from collections import defaultdict
 
 
-# In[99]:
 
+# In[92]:
 
-from ortools.linear_solver import pywraplp
-import itertools
 
 N_RATING_SECURITY_MARGIN = 0.9
-n_ratings = N_RATING_SECURITY_MARGIN * pd.DataFrame(ratings_dict, index=flows.index)
-n_1_ratings = pd.DataFrame(ratings_dict, index=flows.index)
+n_ratings = N_RATING_SECURITY_MARGIN * pd.DataFrame(ratings_dict, index=flows_n.index)
+n_1_ratings = pd.DataFrame(ratings_dict, index=flows_n.index)
 
 cbcos_idx = pd.MultiIndex.from_product(
     [list(monitored_linenames), contingencies_names]
 )
-upper_bounds = pd.DataFrame(0, columns=cbcos_idx, index=flows.index)
-lower_bounds = pd.DataFrame(0, columns=cbcos_idx, index=flows.index)
+upper_bounds = pd.DataFrame(0.0, columns=cbcos_idx, index=flows_n.index)
+lower_bounds = pd.DataFrame(0.0, columns=cbcos_idx, index=flows_n.index)
 
-sensitivities = pd.Series(0, index=cbcos_idx)
+otdf_matrix = pd.Series(0.0, index=cbcos_idx)
 print("Preparing the optimization problem...")
 for monitored_line in tqdm(monitored_linenames):
     for contingency in contingencies_names:
         cbco = (monitored_line, contingency)
-        sensitivity = (
+        otdf = (
             powershift_sensitivity_with_linenames.loc[monitored_line]
-            + otdf_matrix.loc[contingency, monitored_line]
+            + lodf_matrix.loc[contingency, monitored_line]
             * powershift_sensitivity_with_linenames.loc[contingency]
         )
-        sensitivities[(monitored_line, contingency)] = sensitivity
+        otdf_matrix[(monitored_line, contingency)] = otdf
         if monitored_line == contingency:
             # N condition
             upper_bounds[(monitored_line, contingency)] = (
-                n_ratings[monitored_line] - flows[monitored_line]
+                n_ratings[monitored_line] - flows_n[monitored_line]
             )
             lower_bounds[(monitored_line, contingency)] = (
-                -n_ratings[monitored_line] - flows[monitored_line]
+                -n_ratings[monitored_line] - flows_n[monitored_line]
             )
         else:
             # N-1 condition
             upper_bounds[(monitored_line, contingency)] = (
                 n_1_ratings[monitored_line]
-                - flows[monitored_line]
-                - otdf_matrix.loc[contingency, monitored_line] * flows[contingency]
+                - flows_n[monitored_line]
+                - lodf_matrix.loc[contingency, monitored_line] * flows_n[contingency]
             )
             lower_bounds[(monitored_line, contingency)] = (
                 -n_1_ratings[monitored_line]
-                - flows[monitored_line]
-                - otdf_matrix.loc[contingency, monitored_line] * flows[contingency]
+                - flows_n[monitored_line]
+                - lodf_matrix.loc[contingency, monitored_line] * flows_n[contingency]
             )
 
 powershift_result = defaultdict(list)
@@ -1634,7 +1609,7 @@ for pit in tqdm(flows.index):
         )
         # Set how the constraint changes regarding the powershift
         constraints[iconstraint].SetCoefficient(
-            powershift, float(sensitivities[iconstraint])
+            powershift, float(otdf_matrix[iconstraint])
         )
 
     # Max powershift in A->B direction and min powershift in B->A direction
@@ -1660,13 +1635,13 @@ for pit in tqdm(flows.index):
         critical_branches[direction].append(critical_branch)
 
 
-# In[100]:
+# In[93]:
 
 
 pd.DataFrame(powershift_result).head()
 
 
-# In[101]:
+# In[94]:
 
 
 pd.DataFrame(powershift_result).plot()
@@ -1676,7 +1651,7 @@ pd.DataFrame(powershift_result).plot()
 
 # ### Create HVDC Baixas-SLlogaia
 
-# In[102]:
+# In[95]:
 
 
 voltage_level_from_id = voltage_levels[voltage_levels["name"] == "BAIXAP7"].index[0]
@@ -1703,21 +1678,23 @@ network.create_hvdc_lines(
 )
 
 
-# In[103]:
+# In[96]:
 
 
 display_voltage_level("LLOGAIA")
 
 
-# In[104]:
+# In[97]:
 
 
 display_voltage_level("BAIXAP7")
 
 
 # ### Calculate sensitivity of lines to HVDC
+# 
+# We want to know what is the impact on AC lines of increasing the HVDC setpoint by 1 MW.
 
-# In[105]:
+# In[98]:
 
 
 sa = pp.sensitivity.create_dc_analysis()
@@ -1728,32 +1705,24 @@ monitored_elements = sorted(set([
 ]))
 sa.add_branch_flow_factor_matrix(monitored_elements, ["BaixasSLlogaia"], "hvdc")
 sa_result = sa.run(network, parameters_lf)
-result = sa_result.get_sensitivity_matrix("hvdc").T.rename(index=lines_id_dict)
+hvdc_sensitivity = sa_result.get_sensitivity_matrix("hvdc").T.rename(index=lines_id_dict)
 
 
-# In[106]:
+# In[99]:
 
 
-result.sort_values(by='BaixasSLlogaia')
+hvdc_sensitivity.sort_values(by='BaixasSLlogaia')
 
 
-# In[107]:
+# ### Calculate LODF for HVDC
 
+# We have already calculated the HVDC sensitivity which is the impact on AC lines of increasing the HVDC setpoint by 1 MW (HVDC from 0 MW to 1 MW for example).
+# 
+# The impact of an HVDC outage on the grid will be the opposite: a N-1 HVDC with initial setpoint at 1 MW can also be seen as an HVDC setpoint going from 1 MW to 0 MW.
+# 
+# &rarr;**LODF for HVDC will be the opposite of its sensitivity**
 
-# we need flows for dangling lines
-# result_tielines = result.loc[tie_lines_id]
-# result_dl1 = result_tielines.copy().rename(index={tie_line_id: tie_line["dangling_line1_id"] for tie_line_id, tie_line in tie_lines.iterrows()})
-# result_dl2 = - result_tielines.copy().rename(index={tie_line_id: tie_line["dangling_line2_id"] for tie_line_id, tie_line in tie_lines.iterrows()})
-# hvdc_sensitivity = pd.concat([result, result_dl1, result_dl2]).loc[contingencies_id].rename(index=lines_id_dict)
-
-
-# In[108]:
-
-
-hvdc_sensitivity = result
-
-
-# In[109]:
+# In[100]:
 
 
 n_1_hvdc = - hvdc_sensitivity
@@ -1761,86 +1730,126 @@ n_1_hvdc = n_1_hvdc.loc[monitored_linenames]
 n_1_hvdc.T
 
 
-# In[110]:
+# ### Add LODF of HVDC to the global LODF matrix
+
+# In[101]:
 
 
-otdf_matrix = pd.concat([otdf_matrix, n_1_hvdc.T])
-otdf_matrix
+lodf_matrix = pd.concat([lodf_matrix, n_1_hvdc.T])
+lodf_matrix
 
 
 # ### Calculate FR-ES transfer capacity in **N-1 condition**, with HVDC optimization
 
-# In[111]:
+# - Add the HVDC to the liste of contingencies
+
+# In[102]:
 
 
 contingencies_with_hvdc = contingencies_names + ["BaixasSLlogaia"]
+
+
+# - HVDC are not sensitive to powershift
+
+# In[103]:
+
+
 powershift_sensitivity_with_linenames.loc["BaixasSLlogaia"] = 0
-flows["BaixasSLlogaia"] = 0
 
 
-# In[ ]:
+# - Initial setpoint of HVDC is 0 MW
+
+# In[104]:
 
 
-from ortools.linear_solver import pywraplp
-import itertools
+flows_n["BaixasSLlogaia"] = 0
+
+
+# ### Build the optimization problem and solve it
+# 
+# In order to optimize the NTC allowed by the grid, it can be interesting to take advantage of HVDC installed near the border taken into account.
+# 
+# To calculate the impact of HVDC on the flows on every line of the network, we can use the sensitivites calculated for this kind of device.
+
+# #### Constraints
+# The constraints in N/N-1 condition with HVDC optimization will consist of:
+# - flows including impact of powershift and HVDC changes shouldn't exceed ratings of lines
+# - Capacity of HVDC
+
+# ##### Constraints on flows
+# 
+# \begin{align}
+#     - ratings(i) < \underbrace { \overbrace { flow(i,\small Hour) + \alpha_i . powershift(\small Hour) + \beta_i . HVDC({\small Hour})}^\text{flow of line i after powershift and HVDC changes} + LODF(i,j) . \bigl(\overbrace { flow(j,{\small Hour}) + \alpha_j . powershift({\small Hour}) +  \beta_j . HVDC({\small Hour})}^\text{flow of line j after powershift and HVDC changes}\bigr)}_\text{flow of line i after contingency of line j, powershift and HVDC changes} < ratings(i)
+# \end{align}
+# 
+# where:
+# - $\beta_i$ is the sensibility of the $line_i$ towards variation of the
+#       HVDC: variation of 1 MW of set-point for HVDC.
+# - $HVDC$ = new value for the target set-point value for HDVC, calulated to optimize the Powershift
+#  
+# or
+# 
+# \begin{align}
+#     - ratings(i) - flow(i, \small Hour) -  LODF(i, j) . flow(j, \small Hour) < powershift(\small Hour).\overbrace { \bigl( \alpha_i + LODF(i,j).\alpha_j \bigr)}^\text{OTDF(i, j)} + HVDC(\small Hour). \overbrace { \bigl(\beta_i + LODF(i,j).\beta_j\bigr)}^\text{OTDF\_HVDC(i, j)} < ratings(i) - flow(i, \small Hour) -  LODF(i, j) . flow(j, \small Hour)
+# \end{align}
+# 
+
+# In[105]:
+
+
 N_RATING_SECURITY_MARGIN = 0.9
 
-
-n_ratings = N_RATING_SECURITY_MARGIN * pd.DataFrame(ratings_dict, index=flows.index)
-n_1_ratings = pd.DataFrame(ratings_dict, index=flows.index)
+n_ratings = N_RATING_SECURITY_MARGIN * pd.DataFrame(ratings_dict, index=flows_n.index)
+n_1_ratings = pd.DataFrame(ratings_dict, index=flows_n.index)
 
 cbcos_idx = pd.MultiIndex.from_product(
     [list(monitored_linenames), contingencies_with_hvdc]
 )
-sensi_td_hvdc = pd.DataFrame([], columns=cbcos_idx, index=["BaixasSLlogaia"])
-sensibilite_td_hdvc0 = pd.DataFrame([], columns=cbcos_idx, index=["BaixasSLlogaia"])
+otdf_hvdc = pd.DataFrame([], columns=cbcos_idx, index=["BaixasSLlogaia"])
 
-upper_bounds = pd.DataFrame(0, columns=cbcos_idx, index=flows.index)
-lower_bounds = pd.DataFrame(0, columns=cbcos_idx, index=flows.index)
+upper_bounds = pd.DataFrame(0.0, columns=cbcos_idx, index=flows_n.index)
+lower_bounds = pd.DataFrame(0.0, columns=cbcos_idx, index=flows_n.index)
 
-sensitivities = pd.Series(0, index=cbcos_idx)
+otdf_matrix = pd.Series(0.0, index=cbcos_idx)
 print("Preparing the optimization problem...")
 for monitored_line in tqdm(monitored_linenames):
     for contingency in contingencies_with_hvdc:
         cbco = (monitored_line, contingency)
         if contingency == "BaixasSLlogaia":
             # in case of N-1 HVDC, the HVDC has no more influence to the lines
-            sensi_td_hvdc.loc["BaixasSLlogaia", cbco] = 0
-            sensibilite_td_hdvc0.loc["BaixasSLlogaia", cbco] = hvdc_sensitivity.loc[monitored_line, "BaixasSLlogaia"]
+            otdf_hvdc.loc["BaixasSLlogaia", cbco] = 0
         else:
-            sensi_td_hvdc.loc["BaixasSLlogaia", cbco] = (
+            otdf_hvdc.loc["BaixasSLlogaia", cbco] = (
                 hvdc_sensitivity.loc[monitored_line, "BaixasSLlogaia"]
-                + otdf_matrix.loc[contingency, monitored_line]
+                + lodf_matrix.loc[contingency, monitored_line]
                 * hvdc_sensitivity.loc[contingency, "BaixasSLlogaia"]
             )
-            sensibilite_td_hdvc0.loc["BaixasSLlogaia", cbco] = sensi_td_hvdc.loc["BaixasSLlogaia", cbco]
 
-
-        sensitivity = (
+        otdf = (
             powershift_sensitivity_with_linenames.loc[monitored_line]
-            + otdf_matrix.loc[contingency, monitored_line]
+            + lodf_matrix.loc[contingency, monitored_line]
             * powershift_sensitivity_with_linenames.loc[contingency]
         )
-        sensitivities[(monitored_line, contingency)] = sensitivity
+        otdf_matrix[(monitored_line, contingency)] = otdf
         if monitored_line == contingency:
             # N condition
             upper_bounds[(monitored_line, contingency)] = (
-                n_ratings[monitored_line] - flows[monitored_line]
+                n_ratings[monitored_line] - flows_n[monitored_line]
             )
             lower_bounds[(monitored_line, contingency)] = (
-                -n_ratings[monitored_line] - flows[monitored_line]
+                -n_ratings[monitored_line] - flows_n[monitored_line]
             )
         else:
             # N-1 condition
             upper_bounds[(monitored_line, contingency)] = (
                 n_1_ratings[monitored_line]
-                - flows[monitored_line]
-                - otdf_matrix.loc[contingency, monitored_line] * flows[contingency]
+                - flows_n[monitored_line]
+                - lodf_matrix.loc[contingency, monitored_line] * flows_n[contingency]
             )
             lower_bounds[(monitored_line, contingency)] = (
                 -n_1_ratings[monitored_line]
-                - flows[monitored_line]
-                - otdf_matrix.loc[contingency, monitored_line] * flows[contingency]
+                - flows_n[monitored_line]
+                - lodf_matrix.loc[contingency, monitored_line] * flows_n[contingency]
             )
 
 powershift_result_with_hvdc = defaultdict(list)
@@ -1850,8 +1859,9 @@ print("Computing NTC...")
 for pit in tqdm(flows.index):
     solver = pywraplp.Solver.CreateSolver("GLOP")
 
-    # Variable used to optimize the cost function: only powershift here
+    # Variable used to optimize the cost function: powershift here
     powershift = solver.NumVar(-solver.infinity(), solver.infinity(), "powershift")
+    # And also the HVDC
     hvdc = solver.NumVar(-1000, 1000, "BaixasSLlogaia")
     constraints = []
     for iconstraint, cbco in enumerate(cbcos_idx):
@@ -1868,9 +1878,9 @@ for pit in tqdm(flows.index):
         )
         # Set how the constraint changes regarding the powershift
         constraints[iconstraint].SetCoefficient(
-            powershift, float(sensitivities[iconstraint])
+            powershift, float(otdf_matrix[iconstraint])
         )
-        constraints[iconstraint].SetCoefficient(hvdc, float(sensi_td_hvdc.at["BaixasSLlogaia", cbco]))
+        constraints[iconstraint].SetCoefficient(hvdc, float(otdf_hvdc.at["BaixasSLlogaia", cbco]))
 
     # Max powershift in A->B direction and min powershift in B->A direction
     for direction in ["max", "min"]:
@@ -1900,31 +1910,31 @@ for pit in tqdm(flows.index):
         
 
 
-# In[ ]:
+# In[106]:
 
 
 pd.DataFrame(powershift_result_with_hvdc).plot()
 
 
-# In[ ]:
+# In[107]:
 
 
 df_with_hvdc_max = pd.DataFrame(powershift_result_with_hvdc)["max"]
 
 
-# In[ ]:
+# In[108]:
 
 
 df_without_hvdc_max = pd.DataFrame(powershift_result)["max"]
 
 
-# In[ ]:
+# In[109]:
 
 
 (df_with_hvdc_max - df_without_hvdc_max).sort_values().reset_index(drop=True).plot()
 
 
-# In[ ]:
+# In[110]:
 
 
 df_with_hvdc_min = pd.DataFrame(powershift_result_with_hvdc)["min"]
@@ -1932,31 +1942,31 @@ df_without_hvdc_min = pd.DataFrame(powershift_result)["min"]
 (df_with_hvdc_min - df_without_hvdc_min).sort_values().reset_index(drop=True).plot()
 
 
-# In[ ]:
+# In[111]:
 
 
 from collections import Counter
 
 
-# In[ ]:
+# In[112]:
 
 
 Counter(critical_branches["min"])
 
 
-# In[ ]:
+# In[113]:
 
 
 Counter(critical_branches["max"])
 
 
-# In[ ]:
+# In[114]:
 
 
 pd.Series(hvdc_result["max"]).plot()
 
 
-# In[ ]:
+# In[115]:
 
 
 pd.Series(hvdc_result["min"]).plot()
