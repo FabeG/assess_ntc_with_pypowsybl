@@ -1,7 +1,44 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[119]:
+# # Using pyPowSyBl to assess transfer capacity of new electricity interconnections
+
+# ## Introduction
+
+# Assessing the benefits of interconnection projects is one of the goals of ENTSO-E Ten-Year Network Development Plan (TYNDP).
+# 
+# New electricity interconnections, by increasing power exchange capabilities between countries are key elements to make the energy transition happen in a cost effective and secure way.
+# 
+# Being able to evaluate the increased power flows brought by a new interconnection project is then of major importance. To calculate this indicator (named ΔNTC: increase in Net Transfer Capacity), a tool chain based on [pyPowSyBl](https://powsybl.readthedocs.io/projects/pypowsybl/en/stable/) (from Powsybl Linux Fundation Energy project) has been developed within an ENTSO-E working group and will be used for the next TYNDP.
+# 
+# Based on a real HVDC interconnection project between France and Spain and publicly available data, we will illustrate the methodology used and all pyPowSyBl fonctionnalities involved through a Jupyter notebook:
+# 
+# - Importing TYNDP2022 French, Spanish and Portuguese transmission grid model (in CGMES format) and merging them to build a common grid model,
+# - Calculating yearly load flow on hourly basis,
+# - Taking into account the impact of line tripping,
+# - Calculating the ΔNTC brought by the interconnection project.
+
+# ## Notebook presentation
+# 
+# In this notebook, we will use the pyPowsybl package to cover all the steps involved in calculating transfer capacity for electricity interconnections:
+# 
+# - short presentation of the [pyPowsybl library](https://powsybl.readthedocs.io/projects/pypowsybl/en/stable/) that will be used in each step of this workshop,
+# - import the FR, ES and PT network models (from the public TYNDP2022 dataset provided by Entsoe),
+# - merge these 3 models to generate a common grid model,
+# - use OpenData and pyPowsybl to draw part of the merged network,
+# - calculate PTDF matrix (sensitivities of lines to Load / Generation / interconections / ...),
+# - thanks to Entsoe Transparency Platform, get yearly data (Load / Generation / Crossborder exchanges) on hourly basis,
+# - calculate yearly flows on the common grid network,
+# - calculate the sensitivity to a powershift between France and Spain,
+# - extract the ratings of monitored lines from the model,
+# - calculate the transfer capacity in N condition,
+# - calcultate OTDF matrix (to take into account impact of N-1 on other lines),
+# - calculate the transfer capacity in N-1 condition,
+# - create the Baixas - StLlogaia HVDC in the model,
+# - calculate the sensitivity of lines to this HVDC,
+# - calculate the transfer capacity in N-1 condition using the HVDC to maximize it.
+
+# In[1]:
 
 
 import io
@@ -37,33 +74,49 @@ except ImportError:
 colors = ["#006BA4", "#FF800E", "#ABABAB", "#595959", "#5F9ED1", "#C85200", "#898989", "#A2C8EC", "#FFBC79", "#CFCFCF"]
 
 
+# ---
 # ## Quick tour on how to use pyPowSybl
-# All the elements of the network can be accessed by using the following methods :
-# - voltage levels: ``network.get_voltage_levels()`` (&rightarrow; columns **name**, **substation_id**, **nominal_v**),
-# - substations: ``network.get_substations()`` (&rightarrow; columns **name**, **country**),
-# - loads: ``network.get_loads()`` (&rightarrow; columns **p0**, **bus_id**, **voltage_level_id**)
-# - generators: ``network.get_generators()``
-# - pst: ``network.get_phase_tap_changers()``,
-# - buses: ``network.get_buses()`` (&rightarrow; columns **name**, **synchonous_component**)
-# - lines: ``network.get_lines()`` (&rightarrow; columns **name**, **voltage_level1_id**, **voltage_level2_id**, **connected1**, **connected2**),
-# - two windings transformers: ``network.get_2_windings_transformers()`` (&rightarrow; columns **name**, **voltage_level1_id**, **voltage_level2_id**, **connected1**, **connected2**),
+# Once a network model is loaded in pyPowSybl, all the elements of the network can be accessed by using the following methods :
+# 
+# | Element | method |
+# |----|----|
+# | voltage levels  | [``network.get_voltage_levels()``](https://powsybl.readthedocs.io/projects/pypowsybl/en/latest/reference/api/pypowsybl.network.Network.get_voltage_levels.html#pypowsybl.network.Network.get_voltage_levels) |
+# | substations | [``network.get_substations()``](https://powsybl.readthedocs.io/projects/pypowsybl/en/latest/reference/api/pypowsybl.network.Network.get_substations.html#pypowsybl.network.Network.get_substations) |
+# | buses | [``network.get_buses()``](https://powsybl.readthedocs.io/projects/pypowsybl/en/latest/reference/api/pypowsybl.network.Network.get_buses.html#pypowsybl.network.Network.get_buses) |
+# | loads | [``network.get_loads()``](https://powsybl.readthedocs.io/projects/pypowsybl/en/latest/reference/api/pypowsybl.network.Network.get_loads.html#pypowsybl.network.Network.get_loads) |
+# | generators | [``network.get_generators()``](https://powsybl.readthedocs.io/projects/pypowsybl/en/latest/reference/api/pypowsybl.network.Network.get_generators.html#pypowsybl.network.Network.get_generators) |
+# | lines | [``network.get_lines()``](https://powsybl.readthedocs.io/projects/pypowsybl/en/latest/reference/api/pypowsybl.network.Network.get_lines.html#pypowsybl.network.Network.get_lines) |
+# | 2 windings transformers | [``network.get_2_windings_transformers()``](https://powsybl.readthedocs.io/projects/pypowsybl/en/latest/reference/api/pypowsybl.network.Network.get_2_windings_transformers.html#pypowsybl.network.Network.get_2_windings_transformers) |
+# | xinjections | [``network.get_dangling_lines()``](https://powsybl.readthedocs.io/projects/pypowsybl/en/latest/reference/api/pypowsybl.network.Network.get_dangling_lines.html#pypowsybl.network.Network.get_dangling_lines) |
+# | tie-lines | [``network.get_tie_lines()``](https://powsybl.readthedocs.io/projects/pypowsybl/en/latest/reference/api/pypowsybl.network.Network.get_tie_lines.html#pypowsybl.network.Network.get_tie_lines) |
+# 
+# For a complete description of all the elements of the network and how to interact with them, you can refer to [pyPowSybl documentation](https://powsybl.readthedocs.io/projects/pypowsybl/en/latest/reference/network.html#network-elements-access).
 
 # ### Load a test case MicroGrid
 
-# In[120]:
+# In[2]:
 
 
 network_test = pp.network.create_micro_grid_be_network()
 
 
-# In[121]:
+# ### Draw the whole network
+
+# In[3]:
 
 
-network_test.get_network_area_diagram([], nad_parameters=pp.network.NadParameters(edge_name_displayed=False, substation_description_displayed=True, edge_info_along_edge=True))
+network_test.get_network_area_diagram(
+    [],
+    nad_parameters=pp.network.NadParameters(
+        edge_name_displayed=False,
+        substation_description_displayed=True,
+        edge_info_along_edge=True
+    )
+)
 
 
 # ### Substations
-# 
+
 # ```mermaid
 #     erDiagram
 #         substations {
@@ -74,20 +127,20 @@ network_test.get_network_area_diagram([], nad_parameters=pp.network.NadParameter
 #         }
 # ```
 
-# In[122]:
+# In[4]:
 
 
 substations = network_test.get_substations(attributes=["name", "CGMES.regionName", "geo_tags"])
 substations
 
 
-# In[123]:
+# In[5]:
 
 
 network_test.get_single_line_diagram("87f7002b-056f-4a6a-a872-1744eea757e3", pp.network.SldParameters(use_name=True))
 
 
-# In[124]:
+# In[6]:
 
 
 network_test.get_single_line_diagram("37e14a0f-5e34-4647-a062-8bfd9305fa9d", pp.network.SldParameters(use_name=True))
@@ -104,14 +157,14 @@ network_test.get_single_line_diagram("37e14a0f-5e34-4647-a062-8bfd9305fa9d", pp.
 #         }
 # ```
 
-# In[125]:
+# In[7]:
 
 
 voltage_levels = network_test.get_voltage_levels().sort_values(by="substation_id")
 voltage_levels
 
 
-# In[126]:
+# In[8]:
 
 
 voltage_levels[["name", "substation_id", "nominal_v"]].merge(substations, left_on="substation_id", right_index=True, suffixes=("", "_subst"))
@@ -129,7 +182,7 @@ voltage_levels[["name", "substation_id", "nominal_v"]].merge(substations, left_o
 #         }
 # ```
 
-# In[127]:
+# In[9]:
 
 
 network_test.get_loads()
@@ -149,7 +202,7 @@ network_test.get_loads()
 #         }
 # ```
 
-# In[128]:
+# In[10]:
 
 
 network_test.get_generators()
@@ -166,7 +219,7 @@ network_test.get_generators()
 #         }
 # ```
 
-# In[129]:
+# In[11]:
 
 
 network_test.get_dangling_lines()
@@ -182,15 +235,21 @@ network_test.get_dangling_lines()
 #         }
 # ```
 
-# In[130]:
+# In[12]:
 
 
 network_test.get_buses()
 
 
-# # Load the French, Spanish and Portuguese networks using pyPowsyBl
+# ## Using real network models from TYNDP public dataset
+# 
+# Individual grid models from previous TYNDP can be requested at https://www.entsoe.eu/publications/statistics-and-data/#entso-e-on-line-application-portal-for-network-datasets: 
+# 
+# ![title](./images/tyndp_dataset.png)
 
-# In[131]:
+# ### Load the French, Spanish and Portuguese networks using pyPowsyBl
+
+# In[13]:
 
 
 boundary_set = "20211216T1459Z_ENTSO-E_BD_1346.zip"
@@ -206,13 +265,20 @@ models = {
 networks = {}
 for tso, model in tqdm(models.items()):
     networks[tso] = pp.network.load(Path("./data") / model, parameters=parameters)
+
+
+# ### Merge ES, PT and FR models
+
+# In[14]:
+
+
 network = networks["FR"]
 network.merge([networks["ES"], networks["PT"]])
 
 
-# ## Build interesting dataframes
+# ### Generate useful dataframes
 
-# ### For voltage_levels
+# #### For voltage_levels
 # 
 # ```mermaid
 #     erDiagram
@@ -231,34 +297,34 @@ network.merge([networks["ES"], networks["PT"]])
 #         }
 # ```
 
-# In[132]:
+# In[15]:
 
 
 voltage_levels = network.get_voltage_levels(attributes=["name", "substation_id", "nominal_v"])
 voltage_levels.head()
 
 
-# In[133]:
+# In[16]:
 
 
 substations = network.get_substations(attributes=["name", "CGMES.regionName", "geo_tags"])
 substations.head()
 
 
-# In[134]:
+# In[17]:
 
 
 voltage_levels = voltage_levels.merge(substations, left_on="substation_id", right_index=True, suffixes=("", "_subst"))
 voltage_levels.head()
 
 
-# In[135]:
+# In[18]:
 
 
 buses = network.get_buses(attributes=["synchronous_component"])
 
 
-# ### For generators
+# #### For generators
 # 
 # ```mermaid
 #     erDiagram
@@ -292,7 +358,7 @@ buses = network.get_buses(attributes=["synchronous_component"])
 #         }
 # ```
 
-# In[136]:
+# In[19]:
 
 
 generators = network.get_generators(attributes=["name", "energy_source", "target_p", "max_p", "bus_id", "voltage_level_id"]) 
@@ -302,7 +368,7 @@ generators = generators[generators["synchronous_component"] == 0]
 generators.head()
 
 
-# ### For loads
+# #### For loads
 # 
 # ```mermaid
 #     erDiagram
@@ -334,7 +400,7 @@ generators.head()
 # ```
 # 
 
-# In[137]:
+# In[20]:
 
 
 loads = network.get_loads(attributes=["p0", "bus_id", "voltage_level_id"])
@@ -344,16 +410,80 @@ loads = loads[loads["synchronous_component"] == 0]
 loads.head()
 
 
-# ### Dangling lines / External injections
+# #### Lines
 
-# In[138]:
+# In[21]:
+
+
+lines = network.get_lines(attributes=["name", "p1", "connected1", "connected2"])
+lines
+
+
+# #### Dangling lines / External injections
+# 
+# To get external injections from the models, we will use `dangling_lines` that represents half of a tie-line.
+# 
+# For a more detailed explanation, on how dangling lines are modelized, you can have a look at the [Powsybl documentation](https://powsybl.readthedocs.io/projects/powsybl-core/en/latest/grid_model/network_subnetwork.html#dangling-line)
+
+# In[22]:
 
 
 xinjections = network.get_dangling_lines(attributes=["name", "p0", "p", "voltage_level_id", "tie_line_id"])
-xinjections[xinjections["name"].isin([".EICL72MUHL_PINT228", ".ENSDL71VIGY", ".ENSDL72VIGY", ".EICL73MUHL_PINT228", ])]
+xinjections.head()
 
 
-# In[139]:
+# ##### Merge with voltage levels to retrieve nominal_v
+
+# In[23]:
+
+
+xinjections = (
+    xinjections
+    .merge(voltage_levels["nominal_v"], left_on="voltage_level_id", right_index=True, how="left")
+)
+xinjections.head()
+
+
+# #### Tie-lines
+
+# In[24]:
+
+
+tie_lines = network.get_tie_lines()
+tie_lines.head()
+
+
+# In[25]:
+
+
+tie_lines = (
+    tie_lines
+    # merge with xinjections to retrieve nominal voltages on both sides
+    .merge(xinjections[["nominal_v", "p"]], left_on="dangling_line1_id", right_index=True, how="left")
+    .merge(xinjections[["nominal_v", "p"]], left_on="dangling_line2_id", right_index=True, how="left", suffixes=("1", "2"))
+)
+tie_lines
+
+
+# #### Overall figures
+
+# In[26]:
+
+
+result = {
+    "substations": len(substations),
+    "voltage_levels": len(voltage_levels),
+    "buses": len(buses),
+    "generators": len(generators),
+    "loads": len(generators),
+    "lines": len(lines),
+    "tie-lines": len(tie_lines),
+    "xinjections": len(xinjections[xinjections["tie_line_id"] == ""])
+}
+pd.Series(result)
+
+
+# In[27]:
 
 
 def display_voltage_level(voltage_level_name):
@@ -374,35 +504,17 @@ def display_voltage_level(voltage_level_name):
     )
 
 
-# In[140]:
-
-
-display_voltage_level("VIGY P7")
-
-
 # ## Geographical representation of the network near the France - Spain border
 
-# ### Using OpenData (https://odre.opendatasoft.com/explore) to get RTE substations coordinatees
+# ### Using OpenData to get RTE substations coordinates
+# 
+# The website ODRE (https://odre.opendatasoft.com/explore) present lots of OpenData related to RTE.
+# 
+# We will use here the dataset related to RTE substations coordinates: https://odre.opendatasoft.com/explore/dataset/postes-electriques-rte/table/?disjunctive.fonction&disjunctive.etat&disjunctive.tension&sort=-code_poste
+# 
+# ![title](./images/substations_coordinates.png)
 
-# In[141]:
-
-
-vl_for_gps_fr = (
-    voltage_levels[
-        # Only south-west french network
-        (voltage_levels["geo_tags"] == "RTE-TOULOUSE")
-        # 220 kV and 400 kV
-        & (voltage_levels["nominal_v"] >= 220)
-        # don't take into account fictitious substations 
-        & (~voltage_levels["name"].str.startswith(("1", "2", "3")))
-    ]
-)
-subst_for_gps_fr = vl_for_gps_fr.set_index("substation_id")["name"].str[:-2].str.strip().to_frame()
-
-
-# All RTE substations coordinates can be found at https://odre.opendatasoft.com/explore/dataset/postes-electriques-rte/table/?disjunctive.fonction&disjunctive.etat&disjunctive.tension&sort=-code_poste
-
-# In[142]:
+# In[28]:
 
 
 gps_coords_fr = (
@@ -418,11 +530,28 @@ gps_coords_fr = (
 # Unknown coordinates for BEHLA substation : put it arbitratry in the middle of the line CANTEL71SAUCA (and little longitude deviation to better see the double circuit)
 gps_coords_fr.loc["BEHLA"] = (gps_coords_fr.loc["CANTE"] + gps_coords_fr.loc["SAUCA"]) / 2
 gps_coords_fr.loc["BEHLA", "longitude"] += 0.1
+gps_coords_fr
+
+
+# In[29]:
+
+
+vl_for_gps_fr = (
+    voltage_levels[
+        # Only south-west french network
+        (voltage_levels["geo_tags"] == "RTE-TOULOUSE")
+        # 220 kV and 400 kV
+        & (voltage_levels["nominal_v"] >= 220)
+        # don't take into account fictitious substations 
+        & (~voltage_levels["name"].str.startswith(("1", "2", "3")))
+    ]
+)
+subst_for_gps_fr = vl_for_gps_fr.set_index("substation_id")["name"].str[:-2].str.strip().to_frame()
 
 
 # ### Using geocoder service to find GPS coordinates of Red Electrica substations
 
-# In[143]:
+# In[30]:
 
 
 idx_es = network.get_network_area_diagram_displayed_voltage_levels(
@@ -440,7 +569,7 @@ subst_for_gps_es =  (
 subst_for_gps_es.head()
 
 
-# In[144]:
+# In[31]:
 
 
 city = {
@@ -459,7 +588,7 @@ city = {
 }
 
 
-# In[145]:
+# In[32]:
 
 
 gps_coords_es = {}
@@ -479,28 +608,28 @@ if to_execute:
         time.sleep(1.1)
 
 
-# In[146]:
+# In[33]:
 
 
 coords_es = subst_for_gps_es.merge(pd.DataFrame.from_dict(gps_coords_es, orient="index", columns=["latitude", "longitude"]), left_on="name", right_index=True)
 coords_es.head()
 
 
-# In[147]:
+# In[34]:
 
 
 coords_fr = gps_coords_fr.merge(subst_for_gps_fr.reset_index(), left_on="Code poste", right_on="name").set_index("substation_id")
 coords_fr.head()
 
 
-# In[148]:
+# In[35]:
 
 
 coords_fr_es = pd.concat([coords_fr, coords_es]).rename_axis("id")[["latitude", "longitude"]]
 coords_fr_es.head()
 
 
-# In[149]:
+# In[36]:
 
 
 network.remove_extensions('substationPosition', network.get_extensions('substationPosition').index)
@@ -518,242 +647,114 @@ except ImportError:
 mapview
 
 
-# # Calculate yearly flows in the grid
-
-# ## Network modification
-
-# ### Create the slack bus
-
-# In[150]:
+# In[ ]:
 
 
-# Create substation
-station = pd.DataFrame.from_records(
-    index="id",
-    data=[
-        {"id": "SLACK_SUBST", "country": "TN"},
-    ],
-)
-network.create_substations(station)
-
-# Create voltage level
-voltage_level = pd.DataFrame.from_records(
-    index="id",
-    data=[
-        {
-            "substation_id": "SLACK_SUBST",
-            "id": "SLACK_VL",
-            "topology_kind": "BUS_BREAKER",
-            "nominal_v": 380,
-        },
-    ],
-)
-network.create_voltage_levels(voltage_level)
-
-# Create node
-network.create_buses(id=['SLACK_NODE'], voltage_level_id=['SLACK_VL'])
-
-# Create load
-load = pd.DataFrame.from_records(
-    index="id",
-    data=[
-        {
-            "voltage_level_id": "SLACK_VL",
-            "id": "SLACK_LOAD",
-            "bus_id": "SLACK_NODE",
-            "p0": 5000,
-            "q0": 0,
-        }
-    ],
-)
-network.create_loads(load)
-
-# Create slack generator
-generator = pd.DataFrame.from_records(
-    index="id",
-    data=[
-        {
-            "voltage_level_id": "SLACK_VL",
-            "id": "SLACK_GROUPE",
-            "bus_id": "SLACK_NODE",
-            "target_p": 5000,
-            "min_p": -100000,
-            "max_p": 100000,
-            "target_v": 380,
-            "voltage_regulator_on": True,
-        }
-    ],
-)
-network.create_generators(generator)
-
-# Create the SLACK LINE, connected to TRIP.P7 voltage_level
-voltage_level_connection = "TRI.PP7"
-voltage_level_connection_id = voltage_levels[voltage_levels["name"] == voltage_level_connection].index[0]
-network.create_lines(
-    id='SLACK_LINE',
-    voltage_level1_id='SLACK_VL',
-    bus1_id='SLACK_NODE',
-    voltage_level2_id=voltage_level_connection_id,
-    bus2_id=network.get_bus_breaker_topology(voltage_level_connection_id).buses.index[0],
-    b1=0, b2=0, g1=0, g2=0, r=0.5, x=10
-)
 
 
-# In[151]:
+
+# ## Calculate yearly flows in the grid
+
+# ### Network modification
+
+# #### Remove generators modelizing HVDC injections
+
+# In[37]:
 
 
-parameters_lf = pp.loadflow.Parameters(
-    distributed_slack=False,
-    provider_parameters={
-        "slackBusSelectionMode": "NAME",
-        "slackBusesIds": "SLACK_VL",
-        "plausibleActivePowerLimit": "20000"
-    },
-    connected_component_mode=pp.loadflow.ConnectedComponentMode.MAIN,
-)
-pp.loadflow.run_dc(network, parameters=parameters_lf)
-
-
-# In[152]:
-
-
-# parameters_lf = pp.loadflow.Parameters(
-#     distributed_slack=True,
-#     connected_component_mode=pp.loadflow.ConnectedComponentMode.MAIN,
-# )
-
-
-# In[153]:
-
-
-display_voltage_level("SLACK_VL")
-
-
-# ### Create HVDC Baixas-SLlogaia
-
-# In[154]:
-
-
-# voltage_level_from_id = voltage_levels[voltage_levels["name"] == "BAIXAP7"].index[0]
-# voltage_level_to_id = voltage_levels[voltage_levels["name"] == "LLOGAIA"].index[0]
-# pp.network.create_vsc_converter_station_bay(
-#     network,
-#     id=["Baixas" + '_VSC1', "SLlogaia" + '_VSC2'],
-#     voltage_regulator_on=[True, True],
-#     loss_factor=[0, 0],
-#     target_v=[400, 400],
-#     bus_or_busbar_section_id=[network.get_bus_breaker_topology(voltage_level_from_id).buses.index[0], network.get_bus_breaker_topology(voltage_level_to_id).buses.index[0]],
-#     position_order=[1000, 1000],
-#     raise_exception=True,
-# )
-# network.create_hvdc_lines(
-#     id="BaixasSLlogaia",
-#     converter_station1_id="Baixas" + "_VSC1",
-#     converter_station2_id="SLlogaia" + "_VSC2",
-#     r=0,
-#     nominal_v=320,
-#     converters_mode='SIDE_1_RECTIFIER_SIDE_2_INVERTER',
-#     max_p=2000,
-#     target_p=0,
-# )
-
-
-# In[155]:
-
-
-# network.create_hvdc_lines(
-#     id="BaixasSLogaia",
-#     converter_station1_id="BaixasSLogaia" + "_VSC1",
-#     converter_station2_id="BaixasSLogaia" + "_VSC2",
-#     r=0,
-#     nominal_v=320,
-#     converters_mode='SIDE_1_RECTIFIER_SIDE_2_INVERTER',
-#     max_p=2000,
-#     target_p=0,
-# )
-
-
-# In[156]:
-
-
-# display_voltage_level("LLOGAIA")
-
-
-# ### Remove generators modelizing HVDC injections
-
-# In[157]:
-
-
-#hvdc = generators["name"].str.contains("VSC") | generators["name"].str.contains("HVDC")
+# hvdc = generators["name"].str.contains("VSC") | generators["name"].str.contains("HVDC")
 hvdc = generators["name"].str.contains("VSC")
 generators[hvdc]
 
 
-# In[158]:
+# In[38]:
 
 
 network.remove_elements(generators[hvdc].index)
 generators = generators.loc[~hvdc]
 
 
-# In[159]:
+# #### Starting all generators proportionnaly to their Pmax
+
+# In[39]:
 
 
-# parameters_lf = pp.loadflow.Parameters(
-#     distributed_slack=False,
-#     connected_component_mode=pp.loadflow.ConnectedComponentMode.MAIN,
-# )
-# res = pp.loadflow.run_dc(network, parameters=parameters_lf)
-# res
+# TODO
 
 
-# ## Calculate sensitivity of lines to parameters : PTDF matrix
+# ### Calculate sensitivity of lines to parameters : PTDF matrix
 
-# #### Example with load increase in Spain
+# #### Calculate initial flows
 
-# ##### Calculate initial flows
-
-# In[160]:
+# In[40]:
 
 
 def get_flows(network):
     lines = network.get_lines(attributes=["name", "p1"])
-    tie_lines = network.get_dangling_lines(attributes=["name", "p"]).rename(columns={"p": "p1"})
+    ext_injections = network.get_dangling_lines(attributes=["name", "p"])
+    tie_lines = network.get_tie_lines(attributes=["name", "dangling_line1_id", "dangling_line2_id"])
+    tie_lines = (
+        tie_lines
+        .merge(ext_injections["p"], left_on="dangling_line1_id", right_index=True, how="left")
+        .merge(ext_injections["p"], left_on="dangling_line2_id", right_index=True, how="left", suffixes=("1", "2"))
+    )
     flows = pd.concat([lines, tie_lines])
     return flows.reset_index().set_index(["id", "name"])["p1"]
 
 
-# In[161]:
+# In[41]:
 
 
+parameters_lf = pp.loadflow.Parameters(
+    distributed_slack=False,
+    connected_component_mode=pp.loadflow.ConnectedComponentMode.MAIN,
+)
 res = pp.loadflow.run_dc(network, parameters=parameters_lf)
 initial_flows = get_flows(network)
-res
+print(res)
+print("")
+print(f"There is an unbalance of {res[0].slack_bus_results[0].active_power_mismatch:.1f} MW")
+print("(too much generation started compared to the load)")
 
+
+# In[42]:
+
+
+initial_flows.loc[(slice(None), "HERNANI_XHE_AR11_1_400 + .HERNL71ARGIA")]
+
+
+# #### First sensitivity calculation: example with load increase in Spain
 
 # ##### Increase the load in Spain by 100 MW
 
-# In[162]:
+# In[43]:
 
 
+# Define load_increase (in MW)
+LOAD_INCREASE = 100
+# selection of loads in Spain
 load_es = loads[loads["CGMES.regionName"] == "ES"].copy()
-load_es["p0"] = load_es["p0"] + 100 * load_es["p0"] / load_es["p0"].sum()
+# Increase the load in Spain (proportionnaly to each load)
+load_es["p0"] = load_es["p0"] + LOAD_INCREASE * load_es["p0"] / load_es["p0"].sum()
+# Update the network
 network.update_loads(load_es[["p0"]])
 
 
 # ##### Perform new load flow after load increase
 
-# In[163]:
+# In[44]:
 
 
 res = pp.loadflow.run_dc(network, parameters=parameters_lf)
 flows_after_load_increase = get_flows(network)
-res
+
+print(f"There is an unbalance of {res[0].slack_bus_results[0].active_power_mismatch:.1f} MW")
+print(f"(100 MW less than in the previous load flow: normal since we increased the load by {LOAD_INCREASE} MW)")
 
 
 # ##### Calculate sensitivity to load increase in Spain
 
-# In[164]:
+# In[45]:
 
 
 sensitivity = (flows_after_load_increase - initial_flows) / 100
@@ -762,17 +763,17 @@ sensitivity.dropna().sort_values()
 
 # ##### Go back to initial values
 
-# In[165]:
+# In[46]:
 
 
 network.update_loads(loads.loc[loads["CGMES.regionName"] == "ES", ["p0"]])
 res = pp.loadflow.run_dc(network, parameters=parameters_lf)
-res
+print(f"Unbalance is {res[0].slack_bus_results[0].active_power_mismatch:.1f} MW: OK, same as initial load flow")
 
 
-# ### Parameters selection
+# #### Parameters selection
 
-# In[166]:
+# In[47]:
 
 
 parameters = {
@@ -809,29 +810,36 @@ parameters = {
 }
 
 
-# ### Initial values of the selected parameters
+# <div class="alert alert-block alert-info">
+# For the sake of simplicity, we chose to select only a few parameters: 
+#     
+# - regarding generation per type of production we only considered separately **Nuclear units in France** and **Wind in Spain**: in usual calculations, there is more granularity on sensitivities calculated per type of production
+# - **no PST** sensitivity (we consider the PST on their neutral tap position in all the calculations
+# - no separation between **industrial loads** (NonConformLoad) and **residential load** (ConformLoad)
+# </div>
+# 
 
-# In[167]:
+# #### Initial values of the selected parameters
+
+# In[48]:
 
 
 initial_tso_data = {}
-balance = 0
 for nom, param in parameters.items():
     if param["type"] == "generators":
         initial_tso_data[nom] = generators.loc[param["filter"], "target_p"].sum()
-        balance += initial_tso_data[nom]
     elif param["type"] == "loads":
         initial_tso_data[nom] = loads.loc[param["filter"], "p0"].sum()
-        balance -= initial_tso_data[nom]
     elif param["type"] == "exchange":
         initial_tso_data[nom] = xinjections.loc[param["filter"], "p0"].sum()
-        balance -= initial_tso_data[nom]
 initial_tso_data = pd.Series(initial_tso_data)
 
 
-# ### Check that balance is correct
+# #### Check that balance is correct
+# 
+# The balance is defined as the sum of all the generators - loads - crossborder_exchanges_out
 
-# In[168]:
+# In[49]:
 
 
 balance = (
@@ -842,89 +850,84 @@ balance = (
 balance
 
 
-# ##### Increase the load in Spain by 100 MW
+# In line with the unbalance calculated by the DC load flow:
 
-# In[169]:
-
-
-# increase load in Spain
-load_es = loads[parameters["ES_Load"]["filter"]].copy()
-load_es["p0"] = load_es["p0"] + 100 * load_es["p0"] / load_es["p0"].sum()
-network.update_loads(load_es[["p0"]])
+# In[50]:
 
 
-# ##### New load flow
-
-# In[170]:
+print(f"{res[0].slack_bus_results[0].active_power_mismatch:.1f}")
 
 
-res = pp.loadflow.run_dc(network, parameters=parameters_lf)
-print(res[0].slack_bus_results[0].active_power_mismatch)
-new_flows = get_flows(network)
+# #### Calculating sensitivities to all selected parameters
+
+# In[51]:
 
 
-# ##### Go back to initial loads
-
-# In[171]:
-
-
-network.update_loads(loads.loc[parameters["ES_Load"]["filter"], ["p0"]])
-
-
-# ##### Calculate sensitivity to load increase in Spain
-
-# In[172]:
-
-
-(new_flows - initial_flows).dropna().sort_values()
-
-
-# ### Calculating sensitivities to all selected parameters
-
-# In[173]:
-
-
-flows = {}
+sensitivity = {}
 for nom, param in parameters.items():
     if param["type"] == "generators":
+        # Select the generators we want to calculate sensitivity for
         gen_changed = generators[parameters[nom]["filter"]].copy()
+        # Increase the selected generators by 100 MW (proportionnaly to the max_p of each generator) 
         gen_changed["target_p"] = gen_changed["target_p"] + 100 * gen_changed["max_p"] / gen_changed["max_p"].sum()
+        # Update the network with the modified generators
         network.update_generators(gen_changed[["target_p"]])
+        # Calculate the new load flow
         res = pp.loadflow.run_dc(network, parameters=parameters_lf)
-        flows[nom] = get_flows(network) - initial_flows
+        # Calculate the sensitivity to the parameter
+        sensitivity[nom] = (get_flows(network) - initial_flows) / 100
+        # Go back to initial generators
         network.update_generators(generators.loc[parameters[nom]["filter"], ["target_p"]])
     elif param["type"] == "loads":
+        # Select the loads we want to calculate sensitivity for
         load_changed = loads[parameters[nom]["filter"]].copy()
+        # Increase the selected loads by 100 MW (proportionnaly to each load) 
         load_changed["p0"] = load_changed["p0"] + 100 * load_changed["p0"] / load_changed["p0"].sum()
+        # Update the network with the modified loads
         network.update_loads(load_changed[["p0"]])
+        # Calculate the new load flow
         res = pp.loadflow.run_dc(network, parameters=parameters_lf)
-        flows[nom] = get_flows(network) - initial_flows
+        # Calculate the sensitivity to the parameter
+        sensitivity[nom] = (get_flows(network) - initial_flows) / 100
+        # Go back to initial loads
         network.update_loads(loads.loc[parameters[nom]["filter"], ["p0"]])
     elif param["type"] == "exchange":
+        # Select the xinjections we want to calculate sensitivity for
         inj_changed = xinjections[parameters[nom]["filter"]].copy()
+        # Increase the selected injections by 100 MW (proportionnaly to each xinjections)
         inj_changed["p0"] = inj_changed["p0"] + 100 * inj_changed["p0"] / inj_changed["p0"].sum()
+        # Update the network with the modified xinjections
         network.update_dangling_lines(inj_changed[["p0"]])
+        # Calculate the new load flow
         res = pp.loadflow.run_dc(network, parameters=parameters_lf)
-        flows[nom] = (get_flows(network) - initial_flows)     
+        # Calculate the sensitivity to the parameter
+        sensitivity[nom] = (get_flows(network) - initial_flows) / 100
+        # Go back to initial xinjections values
         network.update_dangling_lines(xinjections.loc[parameters[nom]["filter"], ["p0"]])
 
 
-# ### PTDF matrix generation
+# #### PTDF matrix generation
 
-# In[174]:
-
-
-PTDF = pd.DataFrame(flows) / 100
-PTDF.head()
+# In[52]:
 
 
-# ### All generators started proportionnaly to their Pmax 
+PTDF = pd.DataFrame(sensitivity)
+PTDF
 
-# ## Get yearly values
+
+# ## Get yearly TSO values (load, generation, crossborder exchanges)
+# 
+# Using [Entsoe Transparency Platform at https://transparency.entsoe.eu/](https://transparency.entsoe.eu/load-domain/r2/totalLoadR2/show?name=&defaultValue=false&viewType=TABLE&areaType=CTY&atch=false&dateTime.dateTime=02.09.2024+00:00|CET|DAY&biddingZone.values=CTY|10YFR-RTE------C!CTY|10YFR-RTE------C&dateTime.timezone=CET_CEST&dateTime.timezone_input=CET+(UTC+1)+/+CEST+(UTC+2)), it is possible to download the needed data (export to csv files, but using API is also possible):
+# ![title](./images/tso_data.png)
+# 
+# We will download the following data Spain, Portugal and France:
+# - yearly **load** (on hourly basis),
+# - **generation** per production type,
+# - **crossborder exchanges**.
 
 # ### Load data for ES, PT and FR
 
-# In[175]:
+# In[53]:
 
 
 TSOS = ["ES", "FR", "PT"]
@@ -943,7 +946,7 @@ load = load.rename(columns={col: re.sub(r"[a-zA-Z \[\]-]*\((.*)\)", r'\1_Load', 
 load
 
 
-# In[176]:
+# In[54]:
 
 
 fig = load.plot(
@@ -968,7 +971,7 @@ fig.show()
 
 # ### For generation
 
-# In[177]:
+# In[55]:
 
 
 generation = pd.concat(
@@ -987,7 +990,7 @@ generation = pd.concat(
 generation.head()
 
 
-# In[178]:
+# In[56]:
 
 
 for tso in TSOS:
@@ -995,20 +998,20 @@ for tso in TSOS:
 generation.filter(like="Total")
 
 
-# In[179]:
+# In[57]:
 
 
 generation.head()
 
 
-# In[180]:
+# In[58]:
 
 
 generation = generation.rename(columns=lambda x: x.replace(" - Actual Aggregated [MW]", "").strip())
 generation.head()
 
 
-# In[181]:
+# In[59]:
 
 
 col_to_draw = ["ES_Gen_Total", "FR_Gen_Total", "PT_Gen_Total"]
@@ -1034,7 +1037,7 @@ fig.show()
 
 # ### For crossborder exchanges
 
-# In[182]:
+# In[60]:
 
 
 links = ["FR_ES", "FR_BE", "FR_CH", "FR_DE", "FR_IT", "FR_UK", "ES_PT"]
@@ -1047,7 +1050,7 @@ crossborders_flows = pd.concat(
 crossborders_flows = crossborders_flows.rename(columns={col: re.sub(r"[a-zA-Z ]*\((.*)\) > [a-zA-Z ]*\((.*)\) \[MW\]", r'\1_\2', col) for col in crossborders_flows.columns})
 
 
-# In[183]:
+# In[61]:
 
 
 for link in links:
@@ -1060,7 +1063,7 @@ crossborders_flows
 
 # #### Calculate the balance using load and generation#
 
-# In[184]:
+# In[62]:
 
 
 balance_generation_load = {}
@@ -1070,7 +1073,7 @@ for tso in TSOS:
 
 # #### Calculate the balance using exchanges
 
-# In[185]:
+# In[63]:
 
 
 balance_exchanges = {
@@ -1082,7 +1085,7 @@ balance_exchanges = {
 
 # #### Comparison of balances
 
-# In[186]:
+# In[64]:
 
 
 from plotly.subplots import make_subplots
@@ -1141,7 +1144,7 @@ fig.show()
 
 # #### Modify the LOAD in each TSO to have generation - load = 0
 
-# In[187]:
+# In[65]:
 
 
 for tso in TSOS:
@@ -1153,14 +1156,14 @@ for tso in TSOS:
 
 # ### Build TSO data
 
-# In[188]:
+# In[66]:
 
 
 generation["FR_Other_Gen"] = generation["FR_Gen_Total"] - generation["FR_Nuclear"]
 generation["ES_Other_Gen"] = generation["ES_Gen_Total"] - generation["ES_Wind Onshore"]
 
 
-# In[189]:
+# In[67]:
 
 
 tso_data = pd.concat([load, crossborders_flows, generation["FR_Nuclear"], generation["ES_Wind Onshore"], generation["FR_Other_Gen"], generation["ES_Other_Gen"], generation["PT_Gen_Total"] ], axis=1)
@@ -1170,100 +1173,179 @@ tso_data
 
 
 # ## Calcultate yearly flows
+# 
+# \begin{align}
+# flows_{PiT} = flows_{base\_case} + (tso\_data_{PiT} - tso\_data_{base\_case}) . PTDF
+# \end{align}
 
-# In[190]:
+# In[68]:
 
 
 flows = initial_flows + (tso_data[PTDF.columns] - initial_tso_data).dot(PTDF.T)
 flows
 
 
-# In[191]:
+# In[69]:
 
 
-flows["_18d6873c-e075-524b-8ad0-c6a4aa514a04"]
+flows["_363fc03a-2307-5959-20f7-38c771355440 + _547b44cb-ecc8-514f-bda9-c73a7671ce38"].plot()
 
 
-# In[192]:
+# In[70]:
 
 
-flows["_aa3e5611-4a1c-5c98-8d7f-cc5892751ee0"]
+flows["_0b3075b2-7980-988a-224b-407447636928 + _aaa73dfd-dc95-5acc-bed1-fafc4b3d2d8b"].plot()
 
 
-# In[193]:
+# ## Calculate FR-ES transfer capacity in **N condition**
+# 
+# In N situation, the constraints consist only of flows that shouldn't exceed the N ratings
+# 
+# \begin{align}
+#     - ratings(i) < \overbrace {flow(i, PiT) + powershift(PiT).sensitivity(i)}^\text{flow of line i after powershift} < ratings(i)
+# \end{align}
+# 
+# or
+# 
+# \begin{align}
+#     - ratings(i) - flow(i, PiT) < powershift(PiT).sensitivity(i) < ratings(i) - flow(i, PiT)
+# \end{align}
+# 
+# #### Objective (cost) function
+# 
+# - maximizing the $powershift$ to calculate NTC A->B
+# - minimizing the $powershift$ to calculate NTC B->A
+# 
+# #### Choice of the solver
+# 
+# In order to solve the problem, we will use an Open Source Solver Suite: Google OR-Tools.
+# 
+# From OR-Tools, we will use the GLOP solver.This solver has a few advantages:
+# - free (no licence needed),
+# - easy to install (comes with OR-Tools),
+# - building the problem is really easy to implement and easy to understand,
+# - seems relatively quick.
+# 
+# You can find more information on this solver and step by step examples on how to build an optimization problem [here](https://developers.google.com/optimization/introduction/python)
+
+# ### Define lines to monitor
+# 
+# In this notebook, to simplify the calculations, we will only keep tie-lines between France and Spain
+# 
+# <div class="alert alert-block alert-info">
+# But to assess transfer capacity in the framework of TYNDP, according to the Implementation Guidelines, all the lines with sensitivity greater than 5% should be taken into account
+# </div>
+# 
+
+# In[71]:
 
 
-flows["_a8e44e5c-a57a-5c95-9011-fb724230da32"]
+tie_lines
 
 
-# In[194]:
+# In[72]:
 
 
-flows["_64511498-394f-5f79-a185-a52044271a8c"]
+monitored_linenames = [
+    "HERNANI_XHE_AR11_1_400 + .HERNL71ARGIA",
+    ".ARKAL61ARGIA + XAR_AR21_DESF.ARK_1_220",
+    ".BIESL61PRAGN + BIESCAS_XBI_PR21_1_220",
+    "VIC_XVI_BA11_1_400 + .VICHL71BAIXA"
+]
+# Get only FR-ES tie-lines
+monitored_lines = tie_lines[tie_lines["name"].isin(monitored_linenames)]
+monitored_lines
 
 
-# In[195]:
+# ### Calculate sensitivity to new exchanges (= powershift) between ES &rarr; FR
+
+# In[73]:
 
 
-PTDF.loc["SLACK_LINE"]
-
-
-# In[196]:
-
-
-flows["_363fc03a-2307-5959-20f7-38c771355440"]
-
-
-# In[197]:
-
-
-flows["_0b3075b2-7980-988a-224b-407447636928"]
-
-
-# In[198]:
-
-
-flows["_0a3cbdb0-cd71-52b0-b93d-cb48c9fea3e2"]
-
-
-# In[199]:
-
-
-flows["_2e81de07-4c22-5aa1-9683-5e51b054f7f8"]
-
-
-# # Calculate FR-ES transfer capacity in **N condition**
-
-# ## Calculate sensitivity to exchanges between FR-ES
-
-# In[200]:
-
-
+# Simulate an exchange between ES and FR, based on load variation
 powershift_sensitivity = (PTDF['FR_Load'] - PTDF['ES_Load'])
+# We will keep only lines with sensitivity greater than 5%
 powershift_sensitivity = powershift_sensitivity[powershift_sensitivity.abs() > 0.05]
 powershift_sensitivity_with_linenames = powershift_sensitivity.droplevel(0)
+powershift_sensitivity_with_linenames
 
 
-# ## Extract ratings from the models
+# ### Extract ratings from network model
 
-# In[201]:
+# #### Get ratings
+
+# In[74]:
 
 
-monitored_lines = ["HERNANI_XHE_AR11_1_400", "XAR_AR21_DESF.ARK_1_220", "BIESCAS_XBI_PR21_1_220", "VIC_XVI_BA11_1_400"]
-tie_lines = xinjections.merge(voltage_levels, left_on="voltage_level_id", right_index=True, how="left", suffixes=("", "vl"))
 ratings = network.get_operational_limits()
+ratings
+
+
+# #### Keep only PATL ratings (permanent admissible transmission loading) 
+
+# In[75]:
+
+
 patl_ratings = ratings[ratings["acceptable_duration"] == -1]
-line_ratings = {}
-for monitored_line in monitored_lines:
-    rdfid = tie_lines[tie_lines["name"] == monitored_line].index
-    nominal_voltage = tie_lines.loc[tie_lines["name"] == monitored_line, "nominal_v"].to_numpy()[0]
-    line_ratings[monitored_line] = patl_ratings.loc[rdfid, "value"].to_numpy()[0] * nominal_voltage * math.sqrt(3) / 1_000
-line_ratings
 
 
-# ## Calculate maximum powershift in N condition
+# #### Extract ratings for monitored lines...
 
-# In[202]:
+# In[76]:
+
+
+ratings_monitored_lines = (
+    monitored_lines
+    # merge with ratings to retrieve value of ratings on both sides of the tie-line
+    .merge(patl_ratings["value"], left_on="dangling_line1_id", right_index=True, how="left")
+    .merge(patl_ratings["value"], left_on="dangling_line2_id", right_index=True, how="left", suffixes=("1", "2"))
+)
+ratings_monitored_lines
+
+
+# ####  ...and convert them in Ampers
+
+# In[77]:
+
+
+ratings_monitored_lines["value"] = ratings_monitored_lines[["value1", "value2"]].fillna(9999).min(axis=1)
+ratings_monitored_lines["nominal_v"] = ratings_monitored_lines["nominal_v1"].where(ratings_monitored_lines["value2"].isnull(), ratings_monitored_lines["nominal_v2"])
+ratings_monitored_lines["value_in_mw"] = math.sqrt(3) * ratings_monitored_lines["nominal_v"] * ratings_monitored_lines["value"] / 1_000
+ratings_dict = ratings_monitored_lines.set_index("name")["value_in_mw"].to_dict()
+
+
+# In[78]:
+
+
+pd.Series(ratings_dict)
+
+
+# ### Extract ratings from the models
+
+# In[79]:
+
+
+# monitored_lines = ["HERNANI_XHE_AR11_1_400", "XAR_AR21_DESF.ARK_1_220", "BIESCAS_XBI_PR21_1_220", "VIC_XVI_BA11_1_400"]
+# tie_lines = xinjections.merge(voltage_levels, left_on="voltage_level_id", right_index=True, how="left", suffixes=("", "vl"))
+# ratings = network.get_operational_limits()
+# patl_ratings = ratings[ratings["acceptable_duration"] == -1]
+# line_ratings = {}
+# for monitored_line in monitored_lines:
+#     rdfid = tie_lines[tie_lines["name"] == monitored_line].index
+#     nominal_voltage = tie_lines.loc[tie_lines["name"] == monitored_line, "nominal_v"].to_numpy()[0]
+#     line_ratings[monitored_line] = patl_ratings.loc[rdfid, "value"].to_numpy()[0] * nominal_voltage * math.sqrt(3) / 1_000
+# line_ratings
+
+
+# In[80]:
+
+
+flows.droplevel(0, axis=1)["HERNANI_XHE_AR11_1_400 + .HERNL71ARGIA"]
+
+
+# ### Calculate maximum powershift in N condition
+
+# In[81]:
 
 
 from ortools.linear_solver import pywraplp
@@ -1271,15 +1353,15 @@ from ortools.linear_solver import pywraplp
 N_RATING_SECURITY_MARGIN = 0.9
 
 # Get the flows for monitored line only
-flows_n = flows.droplevel(0, axis=1)[monitored_lines]
+flows_n = flows.droplevel(0, axis=1)[monitored_linenames]
 
-ratings = N_RATING_SECURITY_MARGIN * pd.DataFrame(line_ratings, index=flows_n.index)
+ratings = N_RATING_SECURITY_MARGIN * pd.DataFrame(ratings_dict, index=flows_n.index)
 
 solutions = []
 # Calculate lower and upper bound to feed the optimizer
-lower_bound = pd.DataFrame(0, columns=monitored_lines, index=flows_n.index)
-upper_bound = pd.DataFrame(0, columns=monitored_lines, index=flows_n.index)
-for monitored_line in tqdm(monitored_lines, desc="calculate upper/lower bounds"):
+lower_bound = pd.DataFrame(0, columns=monitored_linenames, index=flows_n.index)
+upper_bound = pd.DataFrame(0, columns=monitored_linenames, index=flows_n.index)
+for monitored_line in tqdm(monitored_linenames, desc="calculate upper/lower bounds"):
     lower_bound[monitored_line] = -ratings[monitored_line] - flows_n[monitored_line]
     upper_bound[monitored_line] = ratings[monitored_line] - flows_n[monitored_line]
     
@@ -1292,7 +1374,7 @@ for pit in tqdm(range(len(flows)), desc="powershift calculation"):
 
     # Build the constraints
     constraints = {}
-    for iconstraint, monitored_line in enumerate(monitored_lines):
+    for iconstraint, monitored_line in enumerate(monitored_linenames):
         # Define each constraint: first, set lower bounds and upper bounds
         constraints[iconstraint] = solver.Constraint(float(lower_bound.loc[pit, monitored_line]), float(upper_bound.loc[pit, monitored_line]))
         # Set how the constraint changes regarding the powershift
@@ -1308,64 +1390,77 @@ for pit in tqdm(range(len(flows)), desc="powershift calculation"):
     solutions.append([solution_max, solution_min])
 
 
-# In[203]:
+# In[82]:
 
 
-flows.droplevel(0, axis=1)[monitored_lines].head()
+flows.droplevel(0, axis=1).head()
 
 
-# In[204]:
+# In[83]:
 
 
 pd.DataFrame(solutions, columns=["max", "min"]).plot()
 
 
-# # Calculate FR-ES transfer capacity in **N-1 condition**
+# ## Calculate FR-ES transfer capacity in **N-1 condition**
 
-# ## Calculate OTDF matrix to take into account contingencies
+# ### Calculate LODF matrix to take into account contingencies
 
-# In[205]:
+# #### LODF introduction
+# 
+# Line Outage Distribution Factors (LODFs) represent the percentage of a line flow that will show up in other lines after the outage of this line.
+# 
+# For example, in case of line_x outage (with initial flow of 100 MW), the following LODF would mean:
+# - line_y: **10%** &rarr; **+ 10 MW** on line_y
+# - line_z: **- 30%** &rarr; **- 30 MW** on line_y
 
+# #### DC Sensitivity analysis initialization in pyPowsybl
+# - define monitored lines
+# - define contingencies
+# 
+# For a more detailed description, you can have a look at the [sensitivity analysis documentation](https://pypowsybl.readthedocs.io/en/stable/user_guide/sensitivity.html).
 
-network.get_tie_lines().head()
-
-
-# In[206]:
-
-
-tie_lines_id = xinjections.loc[xinjections["name"].isin(("HERNANI_XHE_AR11_1_400", "XAR_AR21_DESF.ARK_1_220", "BIESCAS_XBI_PR21_1_220", "VIC_XVI_BA11_1_400")), "tie_line_id"]
-tie_lines = network.get_tie_lines()
-tie_lines.loc[tie_lines_id]
-
-
-# In[207]:
-
-
-monitored_lines_for_otdf = tie_lines.loc[tie_lines_id, "name"].to_dict()
-monitored_lines_for_otdf
+# In[84]:
 
 
-# In[208]:
+monitored_lines
+
+
+# In[85]:
 
 
 lines_id_dict = initial_flows.reset_index(level=1)["name"].to_dict()
 
 
-# In[209]:
+# In[86]:
 
 
 contingencies_id = powershift_sensitivity[powershift_sensitivity.abs() > 0.05].droplevel(1).index
 
 
-# In[210]:
+# In[87]:
+
+
+len(contingencies_id)
+
+
+# In[88]:
 
 
 sa = pp.sensitivity.create_dc_analysis()
 sa.add_branch_flow_factor_matrix(
-    list(monitored_lines_for_otdf), [loads.index[0]], "otdf"
+    list(monitored_lines.index), [loads.index[0]], "otdf"
 )
 for contingency in contingencies_id:
     sa.add_single_element_contingency(contingency)
+
+
+# #### Run the DC sensitivity analysis
+# 
+# Then get N-1 flows for all the contingencies, and concatenate the results
+
+# In[89]:
+
 
 sa_result = sa.run(network, parameters_lf)
 n_1 = pd.concat(
@@ -1377,13 +1472,31 @@ n_1 = pd.concat(
 n_1.index = contingencies_id
 
 
-# In[211]:
+# In[90]:
 
 
-n_1.sub(sa_result.get_reference_matrix("otdf").squeeze(), axis=1).rename(index=lines_id_dict)
+n_1
 
 
-# In[212]:
+# #### Calculate the LODF
+
+# 
+# \begin{align}
+# LODF^{cb}_{co} = \frac{flow^{cb}_{co} - flow^{cb}_{0}}{flow^{co}_{0}}
+# \end{align}
+# 
+# where:
+# - $flow^{cb}_{co}$ is the flow of the critical branch **cb** after the critical outage **co** occurs
+# - $flow^{cb}_{0}$ is the initial flow of the critical branch **cb**
+# - $flow^{co}_{0}$ is the initial flow of the critical branch **co**
+
+# In[91]:
+
+
+n_1.sub(sa_result.get_reference_matrix("otdf").squeeze(), axis=1)
+
+
+# In[92]:
 
 
 otdf_matrix = (
@@ -1394,70 +1507,80 @@ otdf_matrix = (
 otdf_matrix
 
 
-# In[213]:
+# In[93]:
 
 
 # Tie-lines are made of dangling_line1 + dangling_line2
 # Direction of flows of tie-line is the same as dangling_line1, but in the other direction for dangling_line2
-for col in otdf_matrix.columns:
-    if " + " in col:
-        otdf_matrix[tie_lines.at[col, "dangling_line1_id"]] = otdf_matrix[col]
-        otdf_matrix[tie_lines.at[col, "dangling_line2_id"]] = - otdf_matrix[col]
+# for col in otdf_matrix.columns:
+#     if " + " in col:
+#         otdf_matrix[tie_lines.at[col, "dangling_line1_id"]] = otdf_matrix[col]
+#         otdf_matrix[tie_lines.at[col, "dangling_line2_id"]] = - otdf_matrix[col]
 otdf_matrix = otdf_matrix.rename(columns=lines_id_dict)
-otdf_matrix = otdf_matrix[monitored_lines]
+# otdf_matrix = otdf_matrix[monitored_lines]
 
 
-# In[214]:
+# In[94]:
 
 
 otdf_matrix
 
 
 # ## Calculate maximum powershift in N-1 condition
+# 
+# \begin{align}
+#     - ratings(i) < \underbrace{\overbrace{flow(i, PiT) + powershift(PiT).sensitivity(i)}^\text{flow of line i after powershift} + OTDF(i,j) . \overbrace{\bigl(flow(j, PiT) + powershift(PiT).sensitivity(j)\bigr)}^\text{flow of line j after powershift}}_\text{flow of line i after contingency of line j and powershift} < ratings(i)
+# \end{align}
+# 
+# or
+# 
+# \begin{align}
+#     - ratings(i) - flow(i, PiT) -  OTDF(i, j) . flow(j, PiT) < powershift(PiT).\bigl(sensitivity(i) + OTDF(i,j).sensitivity(j)\bigr) < ratings(i) - flow(i, PiT) -  OTDF(i, j) . flow(j, PiT)
+# \end{align}
 
-# In[215]:
+# In[95]:
 
 
 contingencies_names = list(powershift_sensitivity_with_linenames.index)
 
 
-# In[216]:
+# In[96]:
 
 
 flows = flows.droplevel(axis=1, level=0)
 
 
-# In[217]:
+# In[97]:
 
 
 monitored_lines
 
 
-# In[218]:
+# In[98]:
 
 
 from collections import defaultdict
 
 
-# In[219]:
+# In[99]:
 
 
 from ortools.linear_solver import pywraplp
 import itertools
 
 N_RATING_SECURITY_MARGIN = 0.9
-n_ratings = N_RATING_SECURITY_MARGIN * pd.DataFrame(line_ratings, index=flows.index)
-n_1_ratings = pd.DataFrame(line_ratings, index=flows.index)
+n_ratings = N_RATING_SECURITY_MARGIN * pd.DataFrame(ratings_dict, index=flows.index)
+n_1_ratings = pd.DataFrame(ratings_dict, index=flows.index)
 
 cbcos_idx = pd.MultiIndex.from_product(
-    [list(monitored_lines), contingencies_names]
+    [list(monitored_linenames), contingencies_names]
 )
 upper_bounds = pd.DataFrame(0, columns=cbcos_idx, index=flows.index)
 lower_bounds = pd.DataFrame(0, columns=cbcos_idx, index=flows.index)
 
 sensitivities = pd.Series(0, index=cbcos_idx)
 print("Preparing the optimization problem...")
-for monitored_line in tqdm(monitored_lines):
+for monitored_line in tqdm(monitored_linenames):
     for contingency in contingencies_names:
         cbco = (monitored_line, contingency)
         sensitivity = (
@@ -1537,23 +1660,23 @@ for pit in tqdm(flows.index):
         critical_branches[direction].append(critical_branch)
 
 
-# In[220]:
+# In[100]:
 
 
 pd.DataFrame(powershift_result).head()
 
 
-# In[104]:
+# In[101]:
 
 
 pd.DataFrame(powershift_result).plot()
 
 
-# # Assess HVDC impact on transfer capacity
+# ## Assess HVDC impact on transfer capacity
 
-# ## Create HVDC Baixas-SLlogaia
+# ### Create HVDC Baixas-SLlogaia
 
-# In[221]:
+# In[102]:
 
 
 voltage_level_from_id = voltage_levels[voltage_levels["name"] == "BAIXAP7"].index[0]
@@ -1580,74 +1703,74 @@ network.create_hvdc_lines(
 )
 
 
-# In[225]:
-
-
-res = pp.loadflow.run_dc(network, parameters=parameters_lf)
-
-
-# In[226]:
+# In[103]:
 
 
 display_voltage_level("LLOGAIA")
 
 
-# ## Calculate sensitivity of lines to HVDC
+# In[104]:
 
-# In[227]:
+
+display_voltage_level("BAIXAP7")
+
+
+# ### Calculate sensitivity of lines to HVDC
+
+# In[105]:
 
 
 sa = pp.sensitivity.create_dc_analysis()
 monitored_elements = sorted(set([
     line
-    if line not in xinjections.index else xinjections.loc[line, "tie_line_id"]
     for line in list(contingencies_id)
+    if line not in xinjections.index
 ]))
-sa.add_branch_flow_factor_matrix(monitored_elements, ["BaixasSLlogaia"], "pst_hvdc")
+sa.add_branch_flow_factor_matrix(monitored_elements, ["BaixasSLlogaia"], "hvdc")
 sa_result = sa.run(network, parameters_lf)
-result = sa_result.get_sensitivity_matrix("pst_hvdc").T
+result = sa_result.get_sensitivity_matrix("hvdc").T.rename(index=lines_id_dict)
 
 
-# In[228]:
+# In[106]:
 
 
-tie_lines = network.get_tie_lines()
+result.sort_values(by='BaixasSLlogaia')
 
 
-# In[229]:
+# In[107]:
 
 
 # we need flows for dangling lines
-result_tielines = result.loc[tie_lines_id]
-result_dl1 = result_tielines.copy().rename(index={tie_line_id: tie_line["dangling_line1_id"] for tie_line_id, tie_line in tie_lines.iterrows()})
-result_dl2 = - result_tielines.copy().rename(index={tie_line_id: tie_line["dangling_line2_id"] for tie_line_id, tie_line in tie_lines.iterrows()})
-hvdc_sensitivity = pd.concat([result, result_dl1, result_dl2]).loc[contingencies_id].rename(index=lines_id_dict)
+# result_tielines = result.loc[tie_lines_id]
+# result_dl1 = result_tielines.copy().rename(index={tie_line_id: tie_line["dangling_line1_id"] for tie_line_id, tie_line in tie_lines.iterrows()})
+# result_dl2 = - result_tielines.copy().rename(index={tie_line_id: tie_line["dangling_line2_id"] for tie_line_id, tie_line in tie_lines.iterrows()})
+# hvdc_sensitivity = pd.concat([result, result_dl1, result_dl2]).loc[contingencies_id].rename(index=lines_id_dict)
 
 
-# In[230]:
+# In[108]:
 
 
-hvdc_sensitivity
+hvdc_sensitivity = result
 
 
-# In[231]:
+# In[109]:
 
 
 n_1_hvdc = - hvdc_sensitivity
-n_1_hvdc = n_1_hvdc.loc[monitored_lines]
+n_1_hvdc = n_1_hvdc.loc[monitored_linenames]
 n_1_hvdc.T
 
 
-# In[232]:
+# In[110]:
 
 
 otdf_matrix = pd.concat([otdf_matrix, n_1_hvdc.T])
 otdf_matrix
 
 
-# ## Calculate FR-ES transfer capacity in **N-1 condition**, with HVDC optimization
+# ### Calculate FR-ES transfer capacity in **N-1 condition**, with HVDC optimization
 
-# In[233]:
+# In[111]:
 
 
 contingencies_with_hvdc = contingencies_names + ["BaixasSLlogaia"]
@@ -1655,27 +1778,29 @@ powershift_sensitivity_with_linenames.loc["BaixasSLlogaia"] = 0
 flows["BaixasSLlogaia"] = 0
 
 
-# In[237]:
+# In[ ]:
 
 
 from ortools.linear_solver import pywraplp
 import itertools
 N_RATING_SECURITY_MARGIN = 0.9
+
+
+n_ratings = N_RATING_SECURITY_MARGIN * pd.DataFrame(ratings_dict, index=flows.index)
+n_1_ratings = pd.DataFrame(ratings_dict, index=flows.index)
+
+cbcos_idx = pd.MultiIndex.from_product(
+    [list(monitored_linenames), contingencies_with_hvdc]
+)
 sensi_td_hvdc = pd.DataFrame([], columns=cbcos_idx, index=["BaixasSLlogaia"])
 sensibilite_td_hdvc0 = pd.DataFrame([], columns=cbcos_idx, index=["BaixasSLlogaia"])
 
-n_ratings = N_RATING_SECURITY_MARGIN * pd.DataFrame(line_ratings, index=flows.index)
-n_1_ratings = pd.DataFrame(line_ratings, index=flows.index)
-
-cbcos_idx = pd.MultiIndex.from_product(
-    [list(monitored_lines), contingencies_with_hvdc]
-)
 upper_bounds = pd.DataFrame(0, columns=cbcos_idx, index=flows.index)
 lower_bounds = pd.DataFrame(0, columns=cbcos_idx, index=flows.index)
 
 sensitivities = pd.Series(0, index=cbcos_idx)
 print("Preparing the optimization problem...")
-for monitored_line in tqdm(monitored_lines):
+for monitored_line in tqdm(monitored_linenames):
     for contingency in contingencies_with_hvdc:
         cbco = (monitored_line, contingency)
         if contingency == "BaixasSLlogaia":
@@ -1778,12 +1903,6 @@ for pit in tqdm(flows.index):
 # In[ ]:
 
 
-powershift_result_with_hvdc
-
-
-# In[238]:
-
-
 pd.DataFrame(powershift_result_with_hvdc).plot()
 
 
@@ -1811,30 +1930,6 @@ df_without_hvdc_max = pd.DataFrame(powershift_result)["max"]
 df_with_hvdc_min = pd.DataFrame(powershift_result_with_hvdc)["min"]
 df_without_hvdc_min = pd.DataFrame(powershift_result)["min"]
 (df_with_hvdc_min - df_without_hvdc_min).sort_values().reset_index(drop=True).plot()
-
-
-# In[ ]:
-
-
-pd.concat([df_with_hvdc_min.squeeze(), df_without_hvdc_min.squeeze()]).plot()
-
-
-# In[ ]:
-
-
-df_without_hvdc_min
-
-
-# In[ ]:
-
-
-df_with_hvdc_min
-
-
-# In[ ]:
-
-
-critical_branches["min"]
 
 
 # In[ ]:
