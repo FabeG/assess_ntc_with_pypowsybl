@@ -3,6 +3,23 @@
 
 # # Using pyPowSyBl to assess transfer capacity of new electricity interconnections
 
+# https://github.com/FabeG/assess_ntc_with_pypowsybl
+
+# ## Getting started
+# 
+# ### Either by running the notebook from binder
+# 
+# You can run the notebook remotely: no python nor packages installation needed, just click on [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/FabeG/assess_ntc_with_pypowsybl/HEAD?labpath=assess_ntc_with_pypowsybl.ipynb)
+# 
+# ### Or downloading the repository from github
+# 
+# If you prefer runnning the notebook on your machine:
+# 
+# - you should have ```python``` installed on your laptop (**tested with python 3.10**)
+# - you can install all the required python packages as usual:
+# 
+# ```pip install -r requirements.txt```
+
 # Github repository can be found at https://github.com/FabeG/assess_ntc_with_pypowsybl
 
 # ## Introduction
@@ -11,7 +28,10 @@
 # 
 # New electricity interconnections, by increasing power exchange capabilities between countries are key elements to make the energy transition happen in a cost effective and secure way.
 # 
-# Being able to evaluate the increased power flows brought by a new interconnection project is then of major importance. To calculate this indicator (named ΔNTC: increase in Net Transfer Capacity), a tool chain based on [pyPowSyBl](https://powsybl.readthedocs.io/projects/pypowsybl/en/stable/) (from Powsybl Linux Fundation Energy project) has been developed within an ENTSO-E working group and will be used for the next TYNDP.
+# Being able to evaluate the increased power flows brought by a new interconnection project is then of major importance.
+# To calculate this indicator (named ΔNTC: increase in Net Transfer Capacity), a tool chain based on [pyPowSyBl](https://powsybl.readthedocs.io/projects/pypowsybl/en/stable/) (from Powsybl Linux Fundation Energy project) has been developed within an ENTSO-E working group and will be used for the next TYNDP.
+# 
+# The methodology regarding &Delta;NTC calculation is in line with the [Implementation Guidelines for TYNDP2024](https://tyndp.entsoe.eu/resources/tyndp-2024-implementation-guidelines) (except for some simplifications)
 # 
 # Based on a real HVDC interconnection project between France and Spain and publicly available data, we will illustrate the methodology used and all pyPowSyBl fonctionnalities involved through a Jupyter notebook:
 # 
@@ -60,11 +80,14 @@ from ortools.linear_solver import pywraplp
 import pandas as pd
 import plotly.graph_objects as go
 import pypowsybl as pp
+
+import warnings
+warnings.filterwarnings("ignore")
+
 pd.options.plotting.backend = "plotly"
 
 try:
     import entsoe_secrets
-    token = entsoe_secrets.token
     proxies = entsoe_secrets.proxies
 except ImportError:
     # To get a token to use Entsoe RESTful API:
@@ -1386,15 +1409,18 @@ for pit in tqdm(range(len(flows)), desc="powershift calculation"):
     # Find the maximum Powershift A->B    
     solver.Maximize(powershift)
     status = solver.Solve()
-    solution_max = powershift.solution_value()
+    if status == pywraplp.Solver.OPTIMAL:
+        solution_max = powershift.solution_value()
+    else:
+        solution_max = math.nan
     solutions.append(solution_max)
 
 
 # In[79]:
 
 
-max_powershift_n = pd.DataFrame(solutions, columns=["max powershift in N"])
-max_powershift_n.plot()
+max_powershift_n = pd.DataFrame(solutions, columns=["max powershift ES→FR in N"])
+max_powershift_n.plot(labels=dict(index="Hours", value="MW"))
 
 
 # ## Calculate ES-FR transfer capacity in **N-1 condition**
