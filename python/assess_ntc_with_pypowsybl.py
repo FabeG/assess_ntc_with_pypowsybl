@@ -513,7 +513,7 @@ result = {
     "voltage_levels": len(voltage_levels),
     "buses": len(buses),
     "generators": len(generators),
-    "loads": len(generators),
+    "loads": len(loads),
     "lines": len(lines),
     "tie-lines": len(tie_lines),
     "xinjections": len(xinjections[xinjections["tie_line_id"] == ""])
@@ -881,6 +881,7 @@ for nom, param in parameters.items():
     elif param["type"] == "exchange":
         initial_tso_data[nom] = xinjections.loc[param["filter"], "p0"].sum()
 initial_tso_data = pd.Series(initial_tso_data)
+initial_tso_data
 
 
 # #### Check that balance is correct
@@ -1527,7 +1528,7 @@ lodf_matrix = (
     .divide(initial_flows.loc[contingencies_id].droplevel(0), axis=0)
     .fillna(0)
 )
-lodf_matrix.tail(4)
+lodf_matrix
 
 
 # In[88]:
@@ -1664,6 +1665,12 @@ powershift_n_1.plot(labels=dict(index="Hours", value="MW"))
 # ### Create HVDC Baixas-SLlogaia
 
 # In[93]:
+
+
+display_voltage_level("LLOGAIA")
+
+
+# In[102]:
 
 
 voltage_level_from_id = voltage_levels[voltage_levels["name"] == "BAIXAP7"].index[0]
