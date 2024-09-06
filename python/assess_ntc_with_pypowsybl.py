@@ -3,6 +3,8 @@
 
 # # Using pyPowSyBl to assess transfer capacity of new electricity interconnections
 
+# Github repository can be found at https://github.com/FabeG/assess_ntc_with_pypowsybl
+
 # ## Introduction
 
 # Assessing the benefits of interconnection projects is one of the goals of ENTSO-E Ten-Year Network Development Plan (TYNDP).
@@ -37,6 +39,10 @@
 # - create the Baixas - StLlogaia HVDC in the model,
 # - calculate the sensitivity of lines to this HVDC,
 # - calculate the transfer capacity in N-1 condition using the HVDC to maximize it.
+# 
+# ## Global workflow
+# 
+# ![title](./images/workflow.png)
 
 # In[1]:
 
@@ -77,6 +83,11 @@ colors = ["#006BA4", "#FF800E", "#ABABAB", "#595959", "#5F9ED1", "#C85200", "#89
 
 # ---
 # ## Quick tour on how to use pyPowSybl
+# 
+# 
+# **Note**: pyPowSyBl documentation can be found at https://powsybl.readthedocs.io/projects/pypowsybl/en/stable/index.html
+# 
+# 
 # Once a network model is loaded in pyPowSybl, all the elements of the network can be accessed by using the following methods :
 # 
 # | Element | method |
@@ -91,7 +102,8 @@ colors = ["#006BA4", "#FF800E", "#ABABAB", "#595959", "#5F9ED1", "#C85200", "#89
 # | xinjections | [``network.get_dangling_lines()``](https://powsybl.readthedocs.io/projects/pypowsybl/en/latest/reference/api/pypowsybl.network.Network.get_dangling_lines.html#pypowsybl.network.Network.get_dangling_lines) |
 # | tie-lines | [``network.get_tie_lines()``](https://powsybl.readthedocs.io/projects/pypowsybl/en/latest/reference/api/pypowsybl.network.Network.get_tie_lines.html#pypowsybl.network.Network.get_tie_lines) |
 # 
-# For a complete description of all the elements of the network and how to interact with them, you can refer to [pyPowSybl documentation](https://powsybl.readthedocs.io/projects/pypowsybl/en/latest/reference/network.html#network-elements-access).
+# For a complete description of all the elements of the network and how to interact with them, you can refer to [pyPowSybl documentation](https://powsybl.readthedocs.io/projects/pypowsybl/en/stable/user_guide/network.html#reading-network-elements-data)
+# 
 
 # ### Load a test case MicroGrid
 
@@ -614,7 +626,7 @@ city = {
 
 
 gps_coords_es = {}
-to_execute = False
+to_execute = True
 if to_execute:
     from geopy.geocoders import Nominatim
     import time
@@ -676,11 +688,9 @@ except ImportError:
 mapview
 
 
-# ## Calculate yearly flows in the grid
+# ## Network modification
 
-# ### Network modification
-
-# #### Remove generators modelizing HVDC injections
+# ### Remove generators modelizing HVDC injections
 
 # In[38]:
 
@@ -696,23 +706,17 @@ network.remove_elements(generators[hvdc].index)
 generators = generators.loc[~hvdc]
 
 
-# #### Starting all generators proportionnaly to their Pmax
+# ## Calculate sensitivity of lines to parameters : PTDF matrix
+
+# #### Calculate initial flows using DC load flow
 
 # In[40]:
 
 
-# TODO
-
-
-# ### Calculate sensitivity of lines to parameters : PTDF matrix
-
-# #### Calculate initial flows using DC load flow
-
-# In[41]:
-
-
 def get_flows(network):
+    # Get lines active power flow
     lines = network.get_lines(attributes=["name", "p1"])
+    # Get tie-line active power flow
     ext_injections = network.get_dangling_lines(attributes=["name", "p"])
     tie_lines = network.get_tie_lines(attributes=["name", "dangling_line1_id", "dangling_line2_id"])
     tie_lines = (
@@ -724,7 +728,7 @@ def get_flows(network):
     return flows.reset_index().set_index(["id", "name"])["p1"]
 
 
-# In[42]:
+# In[41]:
 
 
 # Run DC load flow
@@ -748,7 +752,7 @@ print("(too much generation started compared to the load)")
 
 # ##### Increase the load in Spain by 100 MW
 
-# In[43]:
+# In[42]:
 
 
 # Define load_increase (in MW)
@@ -763,7 +767,7 @@ network.update_loads(load_es[["p0"]])
 
 # ##### Perform new load flow after load increase
 
-# In[44]:
+# In[43]:
 
 
 res = pp.loadflow.run_dc(network, parameters=parameters_lf)
@@ -775,7 +779,7 @@ print(f"(100 MW less than in the previous load flow: normal since we increased t
 
 # ##### Calculate sensitivity to load increase in Spain
 
-# In[45]:
+# In[44]:
 
 
 sensitivity = (flows_after_load_increase - initial_flows) / 100
@@ -784,7 +788,7 @@ sensitivity.dropna().sort_values()
 
 # ##### Go back to initial values
 
-# In[46]:
+# In[45]:
 
 
 network.update_loads(loads.loc[loads["CGMES.regionName"] == "ES", ["p0"]])
@@ -794,7 +798,7 @@ print(f"Unbalance is {res[0].slack_bus_results[0].active_power_mismatch:.1f} MW:
 
 # #### Parameters selection
 
-# In[47]:
+# In[46]:
 
 
 parameters = {
@@ -842,7 +846,7 @@ parameters = {
 
 # #### Initial values of the selected parameters
 
-# In[48]:
+# In[47]:
 
 
 initial_tso_data = {}
@@ -860,7 +864,7 @@ initial_tso_data = pd.Series(initial_tso_data)
 # 
 # The balance is defined as the sum of all the generators - loads - crossborder_exchanges_out
 
-# In[49]:
+# In[48]:
 
 
 balance = (
@@ -873,7 +877,7 @@ balance
 
 # In line with the unbalance calculated by the DC load flow:
 
-# In[50]:
+# In[49]:
 
 
 print(f"{res[0].slack_bus_results[0].active_power_mismatch:.1f}")
@@ -881,7 +885,7 @@ print(f"{res[0].slack_bus_results[0].active_power_mismatch:.1f}")
 
 # #### Calculating sensitivities to all selected parameters
 
-# In[51]:
+# In[50]:
 
 
 sensitivity = {}
@@ -929,7 +933,7 @@ for nom, param in parameters.items():
 
 # #### PTDF matrix generation
 
-# In[52]:
+# In[51]:
 
 
 pd.set_option('display.float_format', '{:.3f}'.format)
@@ -949,7 +953,7 @@ PTDF.droplevel(0)
 
 # ### Load data for ES, PT and FR
 
-# In[53]:
+# In[52]:
 
 
 TSOS = ["ES", "FR", "PT"]
@@ -968,7 +972,7 @@ load = load.rename(columns={col: re.sub(r"[a-zA-Z \[\]-]*\((.*)\)", r'\1_Load', 
 load
 
 
-# In[54]:
+# In[53]:
 
 
 fig = load.plot(
@@ -993,7 +997,7 @@ fig.show()
 
 # ### For generation
 
-# In[55]:
+# In[54]:
 
 
 generation = pd.concat(
@@ -1012,7 +1016,7 @@ generation = pd.concat(
 generation.head()
 
 
-# In[56]:
+# In[55]:
 
 
 for tso in TSOS:
@@ -1020,20 +1024,20 @@ for tso in TSOS:
 generation.filter(like="Total")
 
 
-# In[57]:
+# In[56]:
 
 
 generation.head()
 
 
-# In[58]:
+# In[57]:
 
 
 generation = generation.rename(columns=lambda x: x.replace(" - Actual Aggregated [MW]", "").strip())
 generation.head()
 
 
-# In[59]:
+# In[58]:
 
 
 col_to_draw = ["ES_Gen_Total", "FR_Gen_Total", "PT_Gen_Total"]
@@ -1059,7 +1063,7 @@ fig.show()
 
 # ### For crossborder exchanges
 
-# In[60]:
+# In[59]:
 
 
 links = ["FR_ES", "FR_BE", "FR_CH", "FR_DE", "FR_IT", "FR_UK", "ES_PT"]
@@ -1072,7 +1076,7 @@ crossborders_flows = pd.concat(
 crossborders_flows = crossborders_flows.rename(columns={col: re.sub(r"[a-zA-Z ]*\((.*)\) > [a-zA-Z ]*\((.*)\) \[MW\]", r'\1_\2', col) for col in crossborders_flows.columns})
 
 
-# In[61]:
+# In[60]:
 
 
 for link in links:
@@ -1085,7 +1089,7 @@ crossborders_flows
 
 # #### Calculate the balance using load and generation#
 
-# In[62]:
+# In[61]:
 
 
 balance_generation_load = {}
@@ -1095,7 +1099,7 @@ for tso in TSOS:
 
 # #### Calculate the balance using exchanges
 
-# In[63]:
+# In[62]:
 
 
 balance_exchanges = {
@@ -1107,7 +1111,7 @@ balance_exchanges = {
 
 # #### Comparison of balances
 
-# In[64]:
+# In[63]:
 
 
 from plotly.subplots import make_subplots
@@ -1166,7 +1170,7 @@ fig.show()
 
 # #### Modify the LOAD in each TSO to have generation - load = 0
 
-# In[65]:
+# In[64]:
 
 
 for tso in TSOS:
@@ -1178,14 +1182,14 @@ for tso in TSOS:
 
 # ### Build TSO data
 
-# In[66]:
+# In[65]:
 
 
 generation["FR_Other_Gen"] = generation["FR_Gen_Total"] - generation["FR_Nuclear"]
 generation["ES_Other_Gen"] = generation["ES_Gen_Total"] - generation["ES_Wind Onshore"]
 
 
-# In[67]:
+# In[66]:
 
 
 tso_data = pd.concat([load, crossborders_flows, generation["FR_Nuclear"], generation["ES_Wind Onshore"], generation["FR_Other_Gen"], generation["ES_Other_Gen"], generation["PT_Gen_Total"] ], axis=1)
@@ -1200,72 +1204,41 @@ tso_data
 # flows_{Hour} = flows_{base\_case} + (tso\_data_{Hour} - tso\_data_{base\_case}) . PTDF
 # \end{align}
 
-# In[68]:
+# In[67]:
 
 
 flows = initial_flows + (tso_data[PTDF.columns] - initial_tso_data).dot(PTDF.T)
 flows
 
 
-# In[69]:
+# In[68]:
 
 
 flows["_363fc03a-2307-5959-20f7-38c771355440 + _547b44cb-ecc8-514f-bda9-c73a7671ce38"].plot()
 
 
-# In[70]:
+# In[69]:
 
 
 flows["_0b3075b2-7980-988a-224b-407447636928 + _aaa73dfd-dc95-5acc-bed1-fafc4b3d2d8b"].plot()
 
 
-# ## Calculate FR-ES transfer capacity in **N condition**
+# ## Calculate ES-FR transfer capacity in **N condition**
 # 
-# In N situation, the constraints consist only of flows that shouldn't exceed the N ratings
-# 
-# \begin{align}
-#     - ratings(i) < \overbrace {flow(i, PiT) + powershift(PiT).sensitivity(i)}^\text{flow of line i after powershift} < ratings(i)
-# \end{align}
-# 
-# or
-# 
-# \begin{align}
-#     - ratings(i) - flow(i, PiT) < powershift(PiT).sensitivity(i) < ratings(i) - flow(i, PiT)
-# \end{align}
-# 
-# #### Objective (cost) function
-# 
-# - maximizing the $powershift$ to calculate NTC A->B
-# - minimizing the $powershift$ to calculate NTC B->A
-# 
-# #### Choice of the solver
-# 
-# In order to solve the problem, we will use an Open Source Solver Suite: Google OR-Tools.
-# 
-# From OR-Tools, we will use the GLOP solver.This solver has a few advantages:
-# - free (no licence needed),
-# - easy to install (comes with OR-Tools),
-# - building the problem is really easy to implement and easy to understand,
-# - seems relatively quick.
-# 
-# You can find more information on this solver and step by step examples on how to build an optimization problem [here](https://developers.google.com/optimization/introduction/python)
 
 # ### Define lines to monitor
 # 
 # In this notebook, to simplify the calculations, we will only keep tie-lines between France and Spain
 # 
-# <div class="alert alert-block alert-info">
 # But to assess transfer capacity in the framework of TYNDP, according to the Implementation Guidelines, all the lines with sensitivity greater than 5% should be taken into account
-# </div>
-# 
 
-# In[71]:
+# In[70]:
 
 
 tie_lines
 
 
-# In[72]:
+# In[71]:
 
 
 monitored_linenames = [
@@ -1281,7 +1254,7 @@ monitored_lines
 
 # ### Calculate sensitivity to new exchanges (= powershift) between ES &rarr; FR
 
-# In[73]:
+# In[72]:
 
 
 # Simulate an exchange between ES and FR, based on load variation
@@ -1296,7 +1269,7 @@ powershift_sensitivity_with_linenames.sort_values()
 
 # #### Get ratings
 
-# In[74]:
+# In[73]:
 
 
 ratings = network.get_operational_limits()
@@ -1305,7 +1278,7 @@ ratings
 
 # #### Keep only PATL ratings (permanent admissible transmission loading) 
 
-# In[75]:
+# In[74]:
 
 
 patl_ratings = ratings[ratings["acceptable_duration"] == -1]
@@ -1313,7 +1286,7 @@ patl_ratings = ratings[ratings["acceptable_duration"] == -1]
 
 # #### Extract ratings for monitored lines...
 
-# In[76]:
+# In[75]:
 
 
 ratings_monitored_lines = (
@@ -1327,7 +1300,7 @@ ratings_monitored_lines
 
 # ####  ...and convert them in MW
 
-# In[77]:
+# In[76]:
 
 
 # Keep lowest value of both sides
@@ -1338,15 +1311,45 @@ ratings_monitored_lines["value_in_mw"] = math.sqrt(3) * ratings_monitored_lines[
 ratings_dict = ratings_monitored_lines.set_index("name")["value_in_mw"].to_dict()
 
 
-# In[78]:
+# In[77]:
 
 
 pd.Series(ratings_dict)
 
 
+# ### Optimization problem
+# 
+# In N situation, the constraints consist only of flows that shouldn't exceed the N ratings
+# 
+# \begin{align}
+#     - ratings(i) < \overbrace {flow(i, Hour) + powershift(Hour).sensitivity(i)}^\text{flow of line i after powershift} < ratings(i)
+# \end{align}
+# 
+# or
+# 
+# \begin{align}
+#     - ratings(i) - flow(i, Hour) < powershift(Hour).sensitivity(i) < ratings(i) - flow(i, Hour)
+# \end{align}
+# 
+# #### Objective (cost) function
+# 
+# - maximizing the $powershift$ to calculate NTC A->B
+# 
+# #### Choice of the solver
+# 
+# In order to solve the problem, we will use an Open Source Solver Suite: **Google OR-Tools**.
+# 
+# From OR-Tools, we will use the GLOP solver.This solver has a few advantages:
+# - free (no licence needed),
+# - easy to install (comes with OR-Tools),
+# - building the problem is really easy to implement and easy to understand,
+# - seems relatively quick.
+# 
+# You can find more information on this solver and step by step examples on how to build an optimization problem [here](https://developers.google.com/optimization/introduction/python)
+
 # ### Calculate maximum powershift in N condition
 
-# In[79]:
+# In[78]:
 
 
 from ortools.linear_solver import pywraplp
@@ -1384,26 +1387,17 @@ for pit in tqdm(range(len(flows)), desc="powershift calculation"):
     solver.Maximize(powershift)
     status = solver.Solve()
     solution_max = powershift.solution_value()
-    # Find the maximum Powershift B->A
-    solver.Minimize(powershift)
-    status = solver.Solve()
-    solution_min = powershift.solution_value()
-    solutions.append([solution_max, solution_min])
+    solutions.append(solution_max)
 
 
-# In[80]:
+# In[79]:
 
 
-flows.droplevel(0, axis=1).head()
+max_powershift_n = pd.DataFrame(solutions, columns=["max powershift in N"])
+max_powershift_n.plot()
 
 
-# In[81]:
-
-
-pd.DataFrame(solutions, columns=["max", "min"]).plot()
-
-
-# ## Calculate FR-ES transfer capacity in **N-1 condition**
+# ## Calculate ES-FR transfer capacity in **N-1 condition**
 
 # ### Calculate LODF matrix to take into account contingencies
 
@@ -1428,19 +1422,19 @@ pd.DataFrame(solutions, columns=["max", "min"]).plot()
 # 
 # For a more detailed description, you can have a look at the [sensitivity analysis documentation](https://pypowsybl.readthedocs.io/en/stable/user_guide/sensitivity.html).
 
-# In[82]:
+# In[80]:
 
 
 monitored_lines
 
 
-# In[83]:
+# In[81]:
 
 
 contingencies_id = powershift_sensitivity.droplevel(1).index
 
 
-# In[84]:
+# In[82]:
 
 
 # DC analysis initialization
@@ -1456,7 +1450,7 @@ for contingency in contingencies_id:
 # 
 # Then get N-1 flows for all the contingencies, and concatenate the results
 
-# In[85]:
+# In[83]:
 
 
 sa_result = sa.run(network, parameters_lf)
@@ -1469,7 +1463,7 @@ n_1 = pd.concat(
 n_1.index = contingencies_id
 
 
-# In[86]:
+# In[84]:
 
 
 n_1
@@ -1487,19 +1481,19 @@ n_1
 # - $flow^{cb}_{0}$ is the initial flow of the critical branch **cb**
 # - $flow^{co}_{0}$ is the initial flow of the critical branch **co**
 
-# In[87]:
+# In[85]:
 
 
 n_1.sub(sa_result.get_reference_matrix("lodf").squeeze(), axis=1)
 
 
-# In[88]:
+# In[86]:
 
 
 initial_flows.loc[contingencies_id].droplevel(0)
 
 
-# In[89]:
+# In[87]:
 
 
 lodf_matrix = (
@@ -1507,10 +1501,22 @@ lodf_matrix = (
     .divide(initial_flows.loc[contingencies_id].droplevel(0), axis=0)
     .fillna(0)
 )
-lodf_matrix
+lodf_matrix.tail(4)
 
 
-# ## Calculate maximum powershift in N-1 condition
+# In[88]:
+
+
+contingencies_names = list(powershift_sensitivity_with_linenames.index)
+
+
+# In[89]:
+
+
+monitored_lines
+
+
+# ## Optimization problem
 # 
 # \begin{align}
 #     - ratings(i) < \underbrace{\overbrace{flow(i, \small Hour) + powershift(\small Hour).sensitivity(i)}^\text{flow of line i after powershift} + LODF(i,j) . \overbrace{\bigl(flow(j, \small Hour) + powershift(\small Hour).sensitivity(j)\bigr)}^\text{flow of line j after powershift}}_\text{flow of line i after contingency of line j and powershift} < ratings(i)
@@ -1522,25 +1528,9 @@ lodf_matrix
 #     - ratings(i) - flow(i, \small Hour) -  LODF(i, j) . flow(j, \small Hour) < powershift(\small Hour).\bigl(sensitivity(i) + LODF(i,j).sensitivity(j)\bigr) < ratings(i) - flow(i, \small Hour) -  LODF(i, j) . flow(j, \small Hour)
 # \end{align}
 
+# ## Calculate maximum powershift in N-1
+
 # In[90]:
-
-
-contingencies_names = list(powershift_sensitivity_with_linenames.index)
-
-
-# In[91]:
-
-
-monitored_lines
-
-
-# In[ ]:
-
-
-
-
-
-# In[92]:
 
 
 N_RATING_SECURITY_MARGIN = 0.9
@@ -1585,9 +1575,8 @@ for monitored_line in tqdm(monitored_linenames):
                 - lodf_matrix.loc[contingency, monitored_line] * flows_n[contingency]
             )
 
-powershift_result = defaultdict(list)
-pst_hvdc_result = defaultdict(list)
-critical_branches = defaultdict(list)
+powershift_result = []
+critical_branches = []
 print("Computing NTC...")
 for pit in tqdm(flows.index):
     solver = pywraplp.Solver.CreateSolver("GLOP")
@@ -1612,46 +1601,43 @@ for pit in tqdm(flows.index):
             powershift, float(otdf_matrix[iconstraint])
         )
 
-    # Max powershift in A->B direction and min powershift in B->A direction
-    for direction in ["max", "min"]:
-        if direction == "max":
-            solver.Maximize(powershift)
-        elif direction == "min":
-            solver.Minimize(powershift)
-        status = solver.Solve()
-        if status == pywraplp.Solver.OPTIMAL:
-            powershift_sol = powershift.solution_value()
-            # Extract the critical branch that is limiting the powershift max for this PiT
-            critical_branch = "+".join([
-                constraint.name()
-                for constraint in constraints
-                if abs(constraint.dual_value()) > 0
-            ])
-        else:
-            critical_branch = "no solution"
-            powershift_sol = math.nan
+    # Max powershift in A->B direction
+    solver.Maximize(powershift)
+    status = solver.Solve()
+    if status == pywraplp.Solver.OPTIMAL:
+        powershift_sol = powershift.solution_value()
+        # Extract the critical branch that is limiting the powershift max for this PiT
+        critical_branch = "+".join([
+            constraint.name()
+            for constraint in constraints
+            if abs(constraint.dual_value()) > 0
+        ])
+    else:
+        critical_branch = "no solution"
+        powershift_sol = math.nan
 
-        powershift_result[direction].append(powershift_sol)
-        critical_branches[direction].append(critical_branch)
+    powershift_result.append(powershift_sol)
+    critical_branches.append(critical_branch)
 
 
-# In[93]:
+# In[91]:
 
 
 pd.DataFrame(powershift_result).head()
 
 
-# In[94]:
+# In[92]:
 
 
-pd.DataFrame(powershift_result).plot()
+powershift_n_1 = pd.DataFrame(powershift_result, columns=["powershift_max (N-1)"])
+powershift_n_1.plot(labels=dict(index="Hours", value="MW"))
 
 
 # ## Assess HVDC impact on transfer capacity
 
 # ### Create HVDC Baixas-SLlogaia
 
-# In[95]:
+# In[93]:
 
 
 voltage_level_from_id = voltage_levels[voltage_levels["name"] == "BAIXAP7"].index[0]
@@ -1678,13 +1664,13 @@ network.create_hvdc_lines(
 )
 
 
-# In[96]:
+# In[94]:
 
 
 display_voltage_level("LLOGAIA")
 
 
-# In[97]:
+# In[95]:
 
 
 display_voltage_level("BAIXAP7")
@@ -1693,8 +1679,10 @@ display_voltage_level("BAIXAP7")
 # ### Calculate sensitivity of lines to HVDC
 # 
 # We want to know what is the impact on AC lines of increasing the HVDC setpoint by 1 MW.
+# 
+# We will use the ``dc_analysis`` functionality provided by pyPowSyBl.  
 
-# In[98]:
+# In[96]:
 
 
 sa = pp.sensitivity.create_dc_analysis()
@@ -1708,7 +1696,7 @@ sa_result = sa.run(network, parameters_lf)
 hvdc_sensitivity = sa_result.get_sensitivity_matrix("hvdc").T.rename(index=lines_id_dict)
 
 
-# In[99]:
+# In[97]:
 
 
 hvdc_sensitivity.sort_values(by='BaixasSLlogaia')
@@ -1722,7 +1710,7 @@ hvdc_sensitivity.sort_values(by='BaixasSLlogaia')
 # 
 # &rarr;**LODF for HVDC will be the opposite of its sensitivity**
 
-# In[100]:
+# In[98]:
 
 
 n_1_hvdc = - hvdc_sensitivity
@@ -1732,18 +1720,18 @@ n_1_hvdc.T
 
 # ### Add LODF of HVDC to the global LODF matrix
 
-# In[101]:
+# In[99]:
 
 
 lodf_matrix = pd.concat([lodf_matrix, n_1_hvdc.T])
 lodf_matrix
 
 
-# ### Calculate FR-ES transfer capacity in **N-1 condition**, with HVDC optimization
+# ### Calculate ES-FR transfer capacity in **N-1 condition**, with HVDC optimization
 
 # - Add the HVDC to the liste of contingencies
 
-# In[102]:
+# In[100]:
 
 
 contingencies_with_hvdc = contingencies_names + ["BaixasSLlogaia"]
@@ -1751,7 +1739,7 @@ contingencies_with_hvdc = contingencies_names + ["BaixasSLlogaia"]
 
 # - HVDC are not sensitive to powershift
 
-# In[103]:
+# In[101]:
 
 
 powershift_sensitivity_with_linenames.loc["BaixasSLlogaia"] = 0
@@ -1759,7 +1747,7 @@ powershift_sensitivity_with_linenames.loc["BaixasSLlogaia"] = 0
 
 # - Initial setpoint of HVDC is 0 MW
 
-# In[104]:
+# In[102]:
 
 
 flows_n["BaixasSLlogaia"] = 0
@@ -1771,7 +1759,7 @@ flows_n["BaixasSLlogaia"] = 0
 # 
 # To calculate the impact of HVDC on the flows on every line of the network, we can use the sensitivites calculated for this kind of device.
 
-# #### Constraints
+# ##### Constraints
 # The constraints in N/N-1 condition with HVDC optimization will consist of:
 # - flows including impact of powershift and HVDC changes shouldn't exceed ratings of lines
 # - Capacity of HVDC
@@ -1783,6 +1771,7 @@ flows_n["BaixasSLlogaia"] = 0
 # \end{align}
 # 
 # where:
+# - $\alpha_i$ is the sensibility of the $line_i$ towards variation of the powershift
 # - $\beta_i$ is the sensibility of the $line_i$ towards variation of the
 #       HVDC: variation of 1 MW of set-point for HVDC.
 # - $HVDC$ = new value for the target set-point value for HDVC, calulated to optimize the Powershift
@@ -1794,7 +1783,7 @@ flows_n["BaixasSLlogaia"] = 0
 # \end{align}
 # 
 
-# In[105]:
+# In[103]:
 
 
 N_RATING_SECURITY_MARGIN = 0.9
@@ -1852,9 +1841,9 @@ for monitored_line in tqdm(monitored_linenames):
                 - lodf_matrix.loc[contingency, monitored_line] * flows_n[contingency]
             )
 
-powershift_result_with_hvdc = defaultdict(list)
-hvdc_result = defaultdict(list)
-critical_branches_with_hvdc = defaultdict(list)
+powershift_result_with_hvdc = []
+hvdc_result = []
+critical_branches_with_hvdc = []
 print("Computing NTC...")
 for pit in tqdm(flows.index):
     solver = pywraplp.Solver.CreateSolver("GLOP")
@@ -1862,7 +1851,7 @@ for pit in tqdm(flows.index):
     # Variable used to optimize the cost function: powershift here
     powershift = solver.NumVar(-solver.infinity(), solver.infinity(), "powershift")
     # And also the HVDC
-    hvdc = solver.NumVar(-1000, 1000, "BaixasSLlogaia")
+    hvdc = solver.NumVar(-2000, 2000, "BaixasSLlogaia")
     constraints = []
     for iconstraint, cbco in enumerate(cbcos_idx):
         monitored_line, contingency = cbco
@@ -1882,98 +1871,68 @@ for pit in tqdm(flows.index):
         )
         constraints[iconstraint].SetCoefficient(hvdc, float(otdf_hvdc.at["BaixasSLlogaia", cbco]))
 
-    # Max powershift in A->B direction and min powershift in B->A direction
-    for direction in ["max", "min"]:
-        if direction == "max":
-            solver.Maximize(powershift)
-        elif direction == "min":
-            solver.Minimize(powershift)
-        status = solver.Solve()
-        if status == pywraplp.Solver.OPTIMAL:
-            powershift_sol = powershift.solution_value()
-            hvdc_sol = hvdc.solution_value()
-            # Extract the critical branch that is limiting the powershift max for this PiT
-            critical_branch = "+".join([
-                constraint.name()
-                for constraint in constraints
-                if abs(constraint.dual_value()) > 0
-            ])
-        else:
-            critical_branch = "no solution"
-            powershift_sol = math.nan
-            hvdc_sol = math.nan
+    # Max powershift in A->B direction
+    solver.Maximize(powershift)
+    status = solver.Solve()
+    if status == pywraplp.Solver.OPTIMAL:
+        powershift_sol = powershift.solution_value()
+        hvdc_sol = hvdc.solution_value()
+        # Extract the critical branch that is limiting the powershift max for this PiT
+        critical_branch = "+".join([
+            constraint.name()
+            for constraint in constraints
+            if abs(constraint.dual_value()) > 0
+        ])
+    else:
+        critical_branch = "no solution"
+        powershift_sol = math.nan
+        hvdc_sol = math.nan
 
-        powershift_result_with_hvdc[direction].append(powershift_sol)
-        hvdc_result[direction].append(hvdc_sol)
+    powershift_result_with_hvdc.append(powershift_sol)
+    hvdc_result.append(hvdc_sol)
 
-        critical_branches_with_hvdc[direction].append(critical_branch)
-        
+    critical_branches_with_hvdc.append(critical_branch)
+    
 
 
-# In[106]:
+# In[104]:
 
 
-pd.DataFrame(powershift_result_with_hvdc).plot()
+powershift_n_1_with_hvdc = pd.DataFrame(powershift_result_with_hvdc, columns=["max_powershift (N-1 + HVDC)"])
+powershift_n_1_with_hvdc.plot(labels=dict(index="Hours", value="MW"))
 
 
-# In[107]:
+# ## Draw the ΔNTC curve
+
+# In[105]:
 
 
-df_with_hvdc_max = pd.DataFrame(powershift_result_with_hvdc)["max"]
+import numpy as np
+fig = go.Figure()
+fig.add_trace(
+    go.Scatter(
+        x=np.linspace(0, 1, len(powershift_n_1_with_hvdc["max_powershift (N-1 + HVDC)"])),
+        y=pd.DataFrame((powershift_n_1_with_hvdc["max_powershift (N-1 + HVDC)"] - powershift_n_1["powershift_max (N-1)"]).sort_values()).squeeze(),
+        name="ΔNTC ES→FR",
+        mode="lines",
+        hovertemplate="%{x:.2f} %<br>ΔNTC: %{y:.0f} MW<br>",
+        showlegend=True,
+    )
+)
+fig.update_xaxes(
+    tickformat=".1%",
+    ticks="outside",
+    title={"standoff": 15, "text": "Time (%)"},
+)
 
 
-# In[108]:
-
-
-df_without_hvdc_max = pd.DataFrame(powershift_result)["max"]
-
-
-# In[109]:
-
-
-(df_with_hvdc_max - df_without_hvdc_max).sort_values().reset_index(drop=True).plot()
-
-
-# In[110]:
-
-
-df_with_hvdc_min = pd.DataFrame(powershift_result_with_hvdc)["min"]
-df_without_hvdc_min = pd.DataFrame(powershift_result)["min"]
-(df_with_hvdc_min - df_without_hvdc_min).sort_values().reset_index(drop=True).plot()
-
-
-# In[111]:
-
-
-from collections import Counter
-
-
-# In[112]:
-
-
-Counter(critical_branches["min"])
-
-
-# In[113]:
-
-
-Counter(critical_branches["max"])
-
-
-# In[114]:
-
-
-pd.Series(hvdc_result["max"]).plot()
-
-
-# In[115]:
-
-
-pd.Series(hvdc_result["min"]).plot()
-
-
-# In[ ]:
-
-
-
-
+# <div class="alert alert-block alert-info">
+# The steps presented in this notebook are relatively close to what is done to perform &Delta;NTC calculations. However, for the sake of simplicity, a few approximations have been made:
+# 
+# - only tie-lines are monitored in this notebook: normally all lines with sensitivity greater than 5% should be monitored,
+# - country data (load/generation/exchanges) are taken for year 2021: not in line with the TYNDP2022 models (built for 2030 time horizon)
+# - in TYNDP network studies, we don't rely on historical data, but rather perform market simulations based on Entsoe scenarios: Antares (https://github.com/AntaresSimulatorTeam/Antares_Simulator), also OpenSource, is one of these tools,
+# - only nuclear units in France / wind generation in Spain have been fully modelized: we usually modelize each generation per production type,
+# - PST should also be optimized (the same way as HVDC) when they are close to the new interconnection project we assess,
+# - N-1 ratings should be taken into account for internal lines and for some TSO, seasonal thermal limits.
+# </div>
