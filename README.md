@@ -31,3 +31,5 @@ In this notebook, we will use the [pyPowSyBl](https://github.com/powsybl/pypowsy
 - create the Baixas - StLlogaia HVDC in the model,
 - calculate the sensitivity of lines to this HVDC,
 - calculate the transfer capacity in N-1 condition using the HVDC to maximize it.
+
+copyright RTE France - licence MPL 2.0
