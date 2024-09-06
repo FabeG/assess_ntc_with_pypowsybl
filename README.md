@@ -32,4 +32,19 @@ In this notebook, we will use the [pyPowSyBl](https://github.com/powsybl/pypowsy
 - calculate the sensitivity of lines to this HVDC,
 - calculate the transfer capacity in N-1 condition using the HVDC to maximize it.
 
+# Input data used in this notebook
+
+The data used in this notebook is public, but please note that before using it:
+
+- you should fill in the [ENTSO-E TYNDP Dataset Request Form](https://stum.entsoe.eu/)
+  to get access to the TYNDP2022 dataset,
+- if you want to get load, generation or crossborder exchanges from 
+  [Entsoe Transparency Platform](https://transparency.entsoe.eu/dashboard/show), you will have to
+  register first.
+  It is possible also to ask for an API key if you want to automatize the process of
+  collecting the data.
+- GPS coordinates comes from [ODRE website](https://odre.opendatasoft.com/): no registration needed,
+  just download the file (you can also ask for an API key).
+
+
 copyright RTE France - licence MPL 2.0
